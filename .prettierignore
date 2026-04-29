@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+.vite/
+.cache/
+coverage/
+
+# Environment files
+.env
+.env.*
+
+# Lock/build artifacts that do not need formatting
+package-lock.json
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Electron/package outputs
+release/
+releases/
+make/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.zip
+
+# Git
+.git/
