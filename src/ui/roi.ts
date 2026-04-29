@@ -1,12 +1,13 @@
 import { loadDeviceSettings, saveDeviceSettings, type Crop, type Filter } from '../state/store';
+import { requireEl } from './dom';
 
-const roiPreview1 = document.getElementById('roi-preview-1') as HTMLCanvasElement;
-const roiPreview2 = document.getElementById('roi-preview-2') as HTMLCanvasElement;
-const webcam1 = document.getElementById('webcam1') as HTMLVideoElement;
-const webcam2 = document.getElementById('webcam2') as HTMLVideoElement;
+const roiPreview1 = requireEl<HTMLCanvasElement>('roi-preview-1');
+const roiPreview2 = requireEl<HTMLCanvasElement>('roi-preview-2');
+const webcam1 = requireEl<HTMLVideoElement>('webcam1');
+const webcam2 = requireEl<HTMLVideoElement>('webcam2');
 
 function fitWidth(canvas: HTMLCanvasElement) {
-  // Use the actual available width of the column
+  // Use the actual available width of the column.
   const w = Math.max(200, Math.floor(canvas.parentElement?.clientWidth || 260));
   return w;
 }
@@ -18,12 +19,14 @@ export function updateRoiPreview(
   filter: Filter,
 ) {
   if (videoElement.readyState < 2) return;
+
   const vw = videoElement.videoWidth;
   const vh = videoElement.videoHeight;
-  const roiX = crop.x * vw,
-    roiY = crop.y * vh;
-  const roiW = crop.width * vw,
-    roiH = crop.height * vh;
+
+  const roiX = crop.x * vw;
+  const roiY = crop.y * vh;
+  const roiW = crop.width * vw;
+  const roiH = crop.height * vh;
 
   const targetW = fitWidth(canvasElement);
   const targetH = Math.max(100, Math.round(targetW * (crop.height / crop.width)));
@@ -31,7 +34,9 @@ export function updateRoiPreview(
   canvasElement.width = targetW;
   canvasElement.height = targetH;
 
-  const ctx = canvasElement.getContext('2d')!;
+  const ctx = canvasElement.getContext('2d');
+  if (!ctx) return;
+
   ctx.filter = `brightness(${filter.brightness}%) contrast(${filter.contrast}%)`;
   ctx.drawImage(videoElement, roiX, roiY, roiW, roiH, 0, 0, targetW, targetH);
 }

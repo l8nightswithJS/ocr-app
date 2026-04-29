@@ -1,35 +1,34 @@
 // src/ui/status.ts
 
+import { ensureDiv, getEl, queryAll } from './dom';
+
+type StatusTone = 'idle' | 'warn' | 'busy' | 'ok' | 'error';
+
 // Prefer your existing nodes; create safe fallbacks if missing.
 function ensureHost(): HTMLElement {
-  const host = document.getElementById('status-container');
+  const host = getEl<HTMLElement>('status-container');
   if (host) return host;
+
   const div = document.createElement('div');
   div.id = 'status-container';
   document.body.prepend(div);
   return div;
 }
 
-function ensureEl(id: string, hidden = false): HTMLDivElement {
-  let el = document.getElementById(id) as HTMLDivElement | null;
-  if (!el) {
-    el = document.createElement('div');
-    el.id = id;
-    el.style.display = hidden ? 'none' : '';
-    ensureHost().appendChild(el);
-  }
-  return el;
+function ensureStatusDiv(id: string, hidden = false): HTMLDivElement {
+  return ensureDiv(id, {
+    hidden,
+    parent: ensureHost(),
+  });
 }
 
 // Use your panel’s message div if it exists, else make one.
-const statusEl = () =>
-  (document.getElementById('status-message') as HTMLDivElement) || ensureEl('status-message');
+const statusEl = () => getEl<HTMLDivElement>('status-message') || ensureStatusDiv('status-message');
 
 const startupWarnEl = () =>
-  (document.getElementById('startup-warning') as HTMLDivElement) ||
-  ensureEl('startup-warning', true);
+  getEl<HTMLDivElement>('startup-warning') || ensureStatusDiv('startup-warning', true);
 
-function setTone(node: HTMLElement, tone: 'idle' | 'warn' | 'busy' | 'ok' | 'error') {
+function setTone(node: HTMLElement, tone: StatusTone) {
   node.className =
     'font-medium min-h-[44px] flex items-center justify-start rounded-md px-3 py-2 border ' +
     (tone === 'ok'
@@ -44,7 +43,7 @@ function setTone(node: HTMLElement, tone: 'idle' | 'warn' | 'busy' | 'ok' | 'err
 }
 
 export const UI = {
-  showStatus(text: string, tone: 'idle' | 'warn' | 'busy' | 'ok' | 'error' = 'idle') {
+  showStatus(text: string, tone: StatusTone = 'idle') {
     const n = statusEl();
     n.textContent = text;
     setTone(n, tone);
@@ -52,6 +51,7 @@ export const UI = {
 
   showStartupWarning(show: boolean, msg?: string) {
     const n = startupWarnEl();
+
     if (show) {
       n.style.display = '';
       n.textContent = msg || '⚠️ Chip detected — remove before scanning LRM.';
@@ -63,18 +63,25 @@ export const UI = {
   },
 
   enableScanInput(enable: boolean) {
-    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('.lrm-input'));
+    const inputs = queryAll<HTMLInputElement>('.lrm-input');
+
     for (const i of inputs) {
       i.disabled = !enable;
       i.classList.toggle('opacity-60', !enable);
     }
   },
 
-  // table helpers (unchanged)
+  // table helpers
   ensureActiveRow(lrm: string): HTMLElement {
     let row = document.querySelector<HTMLElement>('tr[data-active="true"]');
+
     if (!row) {
-      const tbody = document.querySelector('tbody#data-table-body')!;
+      const tbody = document.querySelector('tbody#data-table-body');
+
+      if (!tbody) {
+        throw new Error('Table body #data-table-body was not found.');
+      }
+
       row = document.createElement('tr');
       row.setAttribute('data-active', 'true');
       row.innerHTML = `
@@ -83,10 +90,15 @@ export const UI = {
         </td>
         <td class="px-6 py-3 font-mono pcb-cell"></td>
         <td class="px-6 py-3 font-mono top-plate-cell"></td>
-        <td class="px-6 py-3"><button class="rescan-btn bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded border">Rescan</button></td>
+        <td class="px-6 py-3">
+          <button class="rescan-btn bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded border">
+            Rescan
+          </button>
+        </td>
       `;
       tbody.appendChild(row);
     }
+
     return row;
   },
 
@@ -102,6 +114,7 @@ export const UI = {
 
   lockRow(row: HTMLElement) {
     row.removeAttribute('data-active');
+
     const input = row.querySelector<HTMLInputElement>('.lrm-input');
     if (input) input.disabled = true;
   },
@@ -111,7 +124,7 @@ export const UI = {
 export type Tone = 'idle' | 'warn' | 'busy' | 'ok' | 'error' | 'success' | 'info' | 'loading';
 
 export function updateStatus(text: string, tone: Tone = 'idle') {
-  const map: Record<Tone, 'idle' | 'warn' | 'busy' | 'ok' | 'error'> = {
+  const map: Record<Tone, StatusTone> = {
     idle: 'idle',
     warn: 'warn',
     busy: 'busy',
@@ -121,5 +134,6 @@ export function updateStatus(text: string, tone: Tone = 'idle') {
     info: 'idle',
     loading: 'busy',
   };
+
   UI.showStatus(text, map[tone]);
 }
