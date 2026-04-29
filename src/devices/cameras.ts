@@ -315,17 +315,11 @@ export async function initWebcams() {
   }
 }
 
-// Rebind on changes
-cameraSelect1?.addEventListener('change', () => {
-  ensureDistinctSelection(cameraSelect1, cameraSelect2);
-  void startStreams();
-});
-cameraSelect2?.addEventListener('change', () => {
-  ensureDistinctSelection(cameraSelect2, cameraSelect1);
-  void startStreams();
-});
-
+// Camera select change handling is intentionally owned by src/main.ts.
+// main.ts also refreshes ROI/filter UI, so keeping the listener there avoids
+// duplicate stream restarts and keeps camera settings in sync.
 // Debounced devicechange
+
 let deviceChangeTimer: any = null;
 navigator.mediaDevices.addEventListener?.('devicechange', () => {
   console.log('devicechange detected (debounced)');

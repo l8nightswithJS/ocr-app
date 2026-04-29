@@ -3244,23 +3244,49 @@ async function start() {
     await clearTable();
   });
 
-  (document.getElementById('camera-select-1') as HTMLSelectElement).addEventListener(
-    'change',
-    (e) => {
-      applyDeviceSettingsToUI(1, (e.target as HTMLSelectElement).value);
-      void startStreams();
-      wireCropControls();
-    },
-  );
+  const cameraSelect1El = document.getElementById('camera-select-1') as HTMLSelectElement | null;
+  const cameraSelect2El = document.getElementById('camera-select-2') as HTMLSelectElement | null;
 
-  (document.getElementById('camera-select-2') as HTMLSelectElement).addEventListener(
-    'change',
-    (e) => {
-      applyDeviceSettingsToUI(2, (e.target as HTMLSelectElement).value);
-      void startStreams();
-      wireCropControls();
-    },
-  );
+  const ensureDifferentCameraSelection = (
+    changedSelect: HTMLSelectElement,
+    otherSelect: HTMLSelectElement,
+  ) => {
+    if (!changedSelect.value || !otherSelect.value) return;
+
+    if (changedSelect.value !== otherSelect.value) return;
+
+    const replacementOption = Array.from(otherSelect.options).find(
+      (option) => option.value !== changedSelect.value,
+    );
+
+    if (replacementOption) {
+      otherSelect.value = replacementOption.value;
+    }
+  };
+
+  cameraSelect1El?.addEventListener('change', (e) => {
+    const selectedDeviceId = (e.target as HTMLSelectElement).value;
+
+    if (cameraSelect2El) {
+      ensureDifferentCameraSelection(cameraSelect1El, cameraSelect2El);
+    }
+
+    applyDeviceSettingsToUI(1, selectedDeviceId);
+    wireCropControls();
+    void startStreams();
+  });
+
+  cameraSelect2El?.addEventListener('change', (e) => {
+    const selectedDeviceId = (e.target as HTMLSelectElement).value;
+
+    if (cameraSelect1El) {
+      ensureDifferentCameraSelection(cameraSelect2El, cameraSelect1El);
+    }
+
+    applyDeviceSettingsToUI(2, selectedDeviceId);
+    wireCropControls();
+    void startStreams();
+  });
 
   if (import.meta.env.VITE_SIM_MODE === 'true') {
     console.log('[SIM MODE] Keyboard controls enabled: P = present, R = remove');
