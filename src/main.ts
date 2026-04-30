@@ -1,5 +1,5 @@
 import './index.css';
-const SIM_MODE = import.meta.env.VITE_SIM_MODE === 'true';
+const SIM_MODE = import.meta.env.VITE_SIM_MODE === 'false';
 
 // Camera module (real vs mock)
 let initWebcams: any;
