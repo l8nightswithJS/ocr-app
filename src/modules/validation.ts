@@ -94,36 +94,23 @@ export async function adaptiveBurstRead(
   const attempts = Math.max(1, Math.floor(maxAttempts));
   const votes = new Map<string, number>();
 
-  const firstRaw = await ocrOnce(videoEl, crop, filter, label);
-  const first = normalizeVote(firstRaw);
-  votes.set(first, 1);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) {
+      await waitForFreshFrameFn(videoEl, minGapFrames);
+    }
 
-  if (attempts === 1) {
-    return finalizeVotes(votes, 1);
+    const raw = await ocrOnce(videoEl, crop, filter, label);
+    const vote = normalizeVote(raw);
+    votes.set(vote, (votes.get(vote) ?? 0) + 1);
+
+    // Stable digit reads can exit early after two matching votes. Keep retrying NONE
+    // through maxAttempts because a later fresh frame may still produce a readable crop.
+    if (attempt >= 2 && vote !== 'NONE' && (votes.get(vote) ?? 0) >= 2) {
+      return finalizeVotes(votes, attempt);
+    }
   }
 
-  await waitForFreshFrameFn(videoEl, minGapFrames);
-
-  const secondRaw = await ocrOnce(videoEl, crop, filter, label);
-  const second = normalizeVote(secondRaw);
-  votes.set(second, (votes.get(second) ?? 0) + 1);
-
-  // Early exit if the first two match.
-  if (first === second) {
-    return finalizeVotes(votes, 2);
-  }
-
-  if (attempts === 2) {
-    return finalizeVotes(votes, 2);
-  }
-
-  await waitForFreshFrameFn(videoEl, minGapFrames);
-
-  const thirdRaw = await ocrOnce(videoEl, crop, filter, label);
-  const third = normalizeVote(thirdRaw);
-  votes.set(third, (votes.get(third) ?? 0) + 1);
-
-  return finalizeVotes(votes, 3);
+  return finalizeVotes(votes, attempts);
 }
 
 /** Legacy compatibility hook. */

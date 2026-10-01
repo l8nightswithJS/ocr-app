@@ -1,14 +1,46 @@
 // main.cjs - CommonJS entry for Electron
 
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, dialog } = require('electron');
 const path = require('node:path');
 
-// Ensure experimental web platform features are on globally.
 // Needed for Web Serial support in Electron/Chromium.
 app.commandLine.appendSwitch('enable-experimental-web-platform-features');
 
-function isFileOrigin(origin) {
-  return typeof origin === 'string' && origin.startsWith('file://');
+function isAllowedOrigin(origin) {
+  if (typeof origin !== 'string') return false;
+  return (
+    origin.startsWith('file://') ||
+    origin.startsWith('http://localhost:') ||
+    origin.startsWith('http://127.0.0.1:') ||
+    origin.startsWith('http://[::1]:')
+  );
+}
+
+function getOriginFromPermissionDetails(details) {
+  return (
+    details?.requestingUrl ||
+    details?.origin ||
+    details?.securityOrigin ||
+    details?.embeddingOrigin ||
+    ''
+  );
+}
+
+function formatSerialPortLabel(port, index) {
+  const parts = [];
+
+  if (port.portName) parts.push(port.portName);
+  if (port.displayName) parts.push(port.displayName);
+  if (port.serialNumber) parts.push(`SN ${port.serialNumber}`);
+
+  const ids = [];
+  if (port.vendorId) ids.push(`VID ${port.vendorId}`);
+  if (port.productId) ids.push(`PID ${port.productId}`);
+  if (ids.length) parts.push(ids.join(' / '));
+
+  if (port.portId) parts.push(`ID ${String(port.portId).slice(0, 12)}...`);
+
+  return parts.length ? parts.join(' — ') : `Serial port ${index + 1}`;
 }
 
 function createWindow() {
@@ -35,23 +67,55 @@ function createWindow() {
   const ses = win.webContents.session;
 
   // ---- Web Serial wiring ----
-  // Handle port selection when navigator.serial.requestPort() is called.
-  ses.on('select-serial-port', (event, portList, _webContents, callback) => {
-    console.log('select-serial-port fired. Available ports:', portList);
-
+  // Electron does not show Chrome's built-in Web Serial picker automatically.
+  // This native dialog is what lets the station app choose KEYENCE COM5 instead
+  // of silently picking the wrong serial device.
+  ses.on('select-serial-port', async (event, portList, _webContents, callback) => {
     event.preventDefault();
 
-    if (portList && portList.length > 0) {
-      // Current behavior: auto-select the first available serial port.
-      // If multiple serial devices are connected later, this may need a picker UI.
-      const chosen = portList[0];
-      console.log('Auto-selecting serial port:', chosen);
-      callback(chosen.portId);
-      return;
-    }
+    try {
+      if (!Array.isArray(portList) || portList.length === 0) {
+        await dialog.showMessageBox(win, {
+          type: 'warning',
+          title: 'No Serial Ports Found',
+          message: 'No serial ports are available.',
+          detail:
+            'Confirm the scanner is connected, configured as USB-COM/serial, and visible in Windows Device Manager under Ports (COM & LPT).',
+          buttons: ['OK'],
+          noLink: true,
+        });
+        callback('');
+        return;
+      }
 
-    console.warn('No serial ports available');
-    callback('');
+      const labels = portList.map(formatSerialPortLabel);
+      const cancelLabel = 'Cancel';
+      const buttons = [...labels, cancelLabel];
+
+      const result = await dialog.showMessageBox(win, {
+        type: 'question',
+        title: 'Select Serial Port',
+        message: 'Select the scanner/fixture COM port',
+        detail:
+          'For Hybrid Mode, choose the KEYENCE HR-100 COM port for the LRM Pairing Scanner. On the station this should be the port shown in Device Manager, such as COM5.',
+        buttons,
+        cancelId: buttons.length - 1,
+        defaultId: 0,
+        noLink: true,
+      });
+
+      if (result.response >= 0 && result.response < portList.length) {
+        const chosen = portList[result.response];
+        console.log('Selected serial port:', chosen);
+        callback(chosen.portId);
+        return;
+      }
+
+      callback('');
+    } catch (error) {
+      console.error('Serial port selection failed:', error);
+      callback('');
+    }
   });
 
   ses.on('serial-port-added', (_event, port) => {
@@ -62,18 +126,20 @@ function createWindow() {
     console.log('serial-port-removed:', port);
   });
 
-  // Allow permission checks for serial and media from the built file:// app.
-  ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
-    if (!isFileOrigin(requestingOrigin)) return false;
+  // Allow permission checks for serial and media from the built file:// app
+  // and from localhost while debugging with Vite.
+  ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
+    const origin = requestingOrigin || getOriginFromPermissionDetails(details);
+    if (!isAllowedOrigin(origin)) return false;
 
     return permission === 'serial' || permission === 'media';
   });
 
-  // Allow active permission requests for camera/media and serial from file://.
+  // Allow active permission requests for camera/media and serial from allowed origins.
   ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-    const origin = details?.requestingUrl || details?.origin || '';
+    const origin = getOriginFromPermissionDetails(details);
 
-    if (isFileOrigin(origin) && (permission === 'serial' || permission === 'media')) {
+    if (isAllowedOrigin(origin) && (permission === 'serial' || permission === 'media')) {
       callback(true);
       return;
     }
@@ -81,13 +147,9 @@ function createWindow() {
     callback(false);
   });
 
-  // Allow device access for serial from file:// origin.
+  // Allow device access for serial from allowed origins.
   ses.setDevicePermissionHandler((details) => {
-    if (details.deviceType === 'serial' && isFileOrigin(details.origin)) {
-      return true;
-    }
-
-    return false;
+    return details.deviceType === 'serial' && isAllowedOrigin(details.origin);
   });
   // ---- end Web Serial & media permission wiring ----
 

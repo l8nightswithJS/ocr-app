@@ -1,16 +1,19 @@
 // src/ocr/gemini.ts
 
-const apiKey = (import.meta as any).env?.VITE_GEMINI_KEY as string;
+const apiKey = ((import.meta as any).env?.VITE_GEMINI_KEY ?? '') as string;
 const SIM_MODE = import.meta.env.VITE_SIM_MODE === 'true';
 const SIM_OCR_MODE = ((import.meta as any).env?.VITE_SIM_OCR_MODE ?? 'gemini') as
   | 'gemini'
   | 'fixed';
 
-const GEMINI_MODEL = ((import.meta as any).env?.VITE_GEMINI_MODEL as string) || 'gemini-2.5-flash';
+// Pin the stable model by default so the request schema does not change
+// unexpectedly when Google's "latest" alias moves to another model.
+const configuredModel = (
+  (import.meta as any).env?.VITE_GEMINI_MODEL as string | undefined
+)?.trim();
+const GEMINI_MODEL = configuredModel || 'gemini-3.5-flash';
 
-const apiUrl =
-  `https://generativelanguage.googleapis.com/v1/models/` +
-  `${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 export type Crop = { x: number; y: number; width: number; height: number };
 export type Filter = { brightness: number; contrast: number };
@@ -59,18 +62,16 @@ export async function readNumberFromCamera(
   const prompt = buildPrompt(label, MAX_DIGITS);
 
   try {
-    // Fast pass: resized + lighter JPEG
     const fastCanvas = resizeCanvasToHeight(finalCanvas, OCR_TARGET_HEIGHT);
     const fastImage = canvasToBase64JPEG(fastCanvas, OCR_JPEG_FAST);
 
     if (fastImage) {
       const fastResult = await callGeminiDigits([fastImage], prompt, label, MAX_DIGITS);
-      if (isValidOcrResult(fastResult, MAX_DIGITS)) {
-        return fastResult || 'NONE';
+      if (fastResult && isValidOcrResult(fastResult, MAX_DIGITS)) {
+        return fastResult;
       }
     }
 
-    // Retry path: original crop + higher JPEG quality
     const retryImage = canvasToBase64JPEG(finalCanvas, OCR_JPEG_RETRY);
     if (!retryImage) return 'NONE';
 
@@ -99,7 +100,7 @@ function buildPrompt(label: 'Top Plate' | 'PCB', maxDigits: number) {
       `Extract the handwritten number from the image.`,
       `Return ONLY digits, with no spaces, punctuation, or extra words.`,
       `The number may contain between 1 and ${maxDigits} digits.`,
-      `The original writing was vertical (top-to-bottom).`,
+      `The original writing was vertical top-to-bottom.`,
       `The image has already been rotated so the digits should read left-to-right.`,
       `Be careful with confusing digits like 9/4/6, 8/6, and 5/2.`,
       `If no number is clearly readable, return NONE.`,
@@ -158,6 +159,7 @@ function drawCropToOffscreen(
   const h = Math.max(1, Math.round(sh));
 
   const canvas = document.createElement('canvas');
+
   if (rotation === 90 || rotation === 270) {
     canvas.width = h;
     canvas.height = w;
@@ -223,9 +225,11 @@ function clamp(value: number, min: number, max: number) {
 
 function normalizeDigits(raw: string, maxDigits: number): string | null {
   if (!raw) return null;
+
   const digitsOnly = raw.replace(/\D/g, '').trim();
   if (!digitsOnly) return null;
   if (digitsOnly.length < 1 || digitsOnly.length > maxDigits) return null;
+
   return digitsOnly;
 }
 
@@ -250,6 +254,7 @@ function collectCandidateTexts(result: any): string[] {
   pushIfString(result?.text);
 
   const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+
   for (const candidate of candidates) {
     pushIfString(candidate?.output);
 
@@ -265,8 +270,33 @@ function collectCandidateTexts(result: any): string[] {
 }
 
 function isValidOcrResult(value: string | null, maxDigits: number): boolean {
-  if (value === null) return true;
+  if (value === null) return false;
   return new RegExp(`^\\d{1,${maxDigits}}$`).test(value);
+}
+
+function buildGenerationConfig(model: string): Record<string, unknown> {
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0,
+    maxOutputTokens: 64,
+  };
+
+  // Gemini 3.x uses thinkingLevel. "minimal" is the lowest supported
+  // level and avoids the invalid thinkingBudget: 0 request.
+  if (/^gemini-3(?:[.-]|$)/i.test(model)) {
+    generationConfig.thinkingConfig = {
+      thinkingLevel: 'minimal',
+    };
+  }
+
+  // Preserve compatibility if the .env is intentionally changed back
+  // to a Gemini 2.5 model, which uses thinkingBudget instead.
+  if (/^gemini-2\.5(?:[.-]|$)/i.test(model)) {
+    generationConfig.thinkingConfig = {
+      thinkingBudget: 0,
+    };
+  }
+
+  return generationConfig;
 }
 
 async function callGeminiDigits(
@@ -278,6 +308,7 @@ async function callGeminiDigits(
   if (!apiKey) throw new Error('API Key is missing.');
 
   const parts: any[] = [{ text: promptText }];
+
   base64ImageArray.forEach((data) => {
     parts.push({
       inlineData: {
@@ -289,6 +320,7 @@ async function callGeminiDigits(
 
   const payload = {
     contents: [{ parts }],
+    generationConfig: buildGenerationConfig(GEMINI_MODEL),
   };
 
   const controller = new AbortController();
@@ -297,7 +329,10 @@ async function callGeminiDigits(
   try {
     const response = await fetch(apiUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
@@ -315,7 +350,10 @@ async function callGeminiDigits(
     for (const text of candidates) {
       const parsed = extractDigits(text, maxDigits);
       if (parsed) return parsed;
-      if (text.toUpperCase().includes('NONE')) return null;
+
+      if (text.toUpperCase().includes('NONE')) {
+        return null;
+      }
     }
 
     return null;

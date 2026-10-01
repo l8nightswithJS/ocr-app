@@ -6,14 +6,21 @@
   "main": "main.cjs",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && npm run verify:dist",
     "preview": "vite preview",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "format": "prettier --write .",
+    "clean": "node scripts/clean.cjs",
+    "clean:dist": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true,maxRetries:3,retryDelay:250});\"",
+    "prestart": "npm run build",
     "start": "electron-forge start",
+    "prepackage": "npm run clean:dist && npm run build",
     "package": "electron-forge package",
+    "premake": "npm run clean && npm run build",
     "make": "electron-forge make",
-    "test:gemini": "node scripts/test-gemini.mjs"
+    "test:gemini": "node scripts/test-gemini.mjs",
+    "verify:dist": "node scripts/verify-dist.cjs",
+    "make:fresh": "npm run clean && npm run build && electron-forge make"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.10.2",

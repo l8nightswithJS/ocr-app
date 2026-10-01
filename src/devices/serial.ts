@@ -290,14 +290,12 @@ class SerialManager {
         throw new Error('WEB_SERIAL_UNAVAILABLE');
       }
 
-      let port: SerialPort | null = null;
-      const existingPorts = await navigator.serial.getPorts();
-
-      if (existingPorts.length > 0) {
-        port = existingPorts[0];
-      } else {
-        port = await navigator.serial.requestPort();
-      }
+      // Always prompt for the Arduino/fixture port instead of automatically grabbing
+      // the first permitted serial device. Once barcode scanners are also used in
+      // USB COM mode, navigator.serial.getPorts() may include scanner ports.
+      // Prompting prevents the OCR fixture connection from accidentally opening
+      // a scanner COM port.
+      const port = await navigator.serial.requestPort();
 
       await port.open(options);
       this.port = port;

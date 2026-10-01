@@ -71,3 +71,13 @@ export async function waitForFreshFrame(_videoEl: HTMLVideoElement, _frames = 1)
   // Mimic the real timing behavior without relying on real frames.
   await new Promise((r) => setTimeout(r, 30));
 }
+
+export function stopAllCameraStreams() {
+  const webcam1 = document.getElementById('webcam1') as HTMLVideoElement | null;
+  const webcam2 = document.getElementById('webcam2') as HTMLVideoElement | null;
+  [webcam1, webcam2].forEach((video) => {
+    const stream = video?.srcObject as MediaStream | null;
+    stream?.getTracks().forEach((track) => track.stop());
+    if (video) video.srcObject = null;
+  });
+}

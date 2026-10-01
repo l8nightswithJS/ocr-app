@@ -6,15 +6,42 @@ export type ScanRecord = {
   ts: number;
 
   // Run/condition info
+  runId?: string;
   condition?: string;
   lyoCondition?: string;
   lrm?: string;
 
   // Beta traceability fields
   mode?: 'standard' | 'traceability_beta';
+  workflowPhase?: 'lrm_pairing' | 'cartridge_ocr';
+  workflowStatus?:
+    | 'lrm_paired_pending_leak'
+    | 'loaded_for_cartridge_ocr'
+    | 'ocr_in_progress'
+    | 'needs_pcb_confirmation'
+    | 'needs_top_correction'
+    | 'needs_rescan'
+    | 'complete'
+    | 'failed_pulled'
+    | 'missing'
+    | 'recovered_waiting_lrm'
+    | 'post_ocr_reject';
+  lockedByStation?: string;
+  lockedAt?: number;
   buildNumber?: string;
   sequenceNumber?: string;
   shroudQr?: string;
+  leakTestStatus?: 'pending' | 'pass' | 'fail';
+  customerQrCode?: string;
+  customerQrSequence?: string;
+  mixwheelLot?: string;
+  sampleCapLot?: string;
+  failureTs?: number;
+  failureReason?: string;
+  postOcrRejectTs?: number;
+  postOcrRejectReason?: string;
+  lrmPairTs?: number;
+  cartridgeScanTs?: number;
 
   // voted raw
   pcb: string | null;
@@ -121,6 +148,20 @@ export class DB {
       const req = store.getAll();
 
       req.onsuccess = () => resolve((req.result as ScanRecord[]) ?? []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+
+  async delete(id: number): Promise<void> {
+    await this.init();
+
+    return new Promise((resolve, reject) => {
+      const tx = this.db!.transaction(STORE, 'readwrite');
+      const store = tx.objectStore(STORE);
+      const req = store.delete(id);
+
+      req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
   }

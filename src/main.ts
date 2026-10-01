@@ -1,10 +1,11 @@
 import './index.css';
-const SIM_MODE = import.meta.env.VITE_SIM_MODE === 'false';
+const SIM_MODE = import.meta.env.VITE_SIM_MODE === 'true';
 
 // Camera module (real vs mock)
 let initWebcams: any;
 let startStreams: any;
 let waitForFreshFrame: any;
+let stopAllCameraStreams: any;
 
 let connectAndListenToArduino: any;
 let reconnectArduino: any;
@@ -23,7 +24,7 @@ async function loadHardwareModules() {
     ? await import('./devices/serial.mock')
     : await import('./devices/serial');
 
-  ({ initWebcams, startStreams, waitForFreshFrame } = cameras);
+  ({ initWebcams, startStreams, waitForFreshFrame, stopAllCameraStreams } = cameras);
   ({
     connectAndListenToArduino,
     reconnectArduino,
@@ -46,7 +47,7 @@ import { loadDeviceSettings, saveDeviceSettings, type Crop, type Filter } from '
 import { readNumberFromCamera } from './ocr/gemini';
 
 import { adaptiveBurstRead } from './modules/validation';
-import { DB } from './modules/db';
+import { DB, type ScanRecord } from './modules/db';
 import { promptOverride } from './modules/overrides';
 import { exportCsv } from './modules/exporter';
 import { settleAfterPresence } from './modules/settle';
@@ -68,6 +69,8 @@ const SIM_OCR_MAX_ATTEMPTS = Math.max(1, Number(import.meta.env.VITE_SIM_OCR_MAX
 
 const OCR_MIN_GAP_FRAMES = Math.max(0, Number(import.meta.env.VITE_OCR_MIN_GAP_FRAMES ?? '1'));
 
+const APP_BUILD_LABEL = 'GNM-HYBRID-2026-06-24.5';
+
 // ---------- Modes ----------
 type AppMode = 'standard' | 'traceability_beta';
 const APP_MODE_KEY = 'ocr-app-mode';
@@ -86,6 +89,50 @@ const BETA_BUILD_KEY = 'ocr-beta-build';
 const BETA_LYO_KEY = 'ocr-beta-lyo';
 const BETA_NEXT_SEQUENCE_KEY = 'ocr-beta-next-sequence';
 const BETA_MISSING_KEY = 'ocr-beta-missing-numbers';
+const BETA_WORKFLOW_PHASE_KEY = 'ocr-beta-workflow-phase';
+const BETA_RUN_ID_KEY = 'ocr-beta-run-id';
+const BETA_QR_INFO_MAP_KEY = 'ocr-beta-qr-info-map';
+const BETA_MIXWHEEL_LOT_KEY = 'ocr-beta-mixwheel-lot';
+const BETA_SAMPLE_CAP_LOT_KEY = 'ocr-beta-sample-cap-lot';
+const BETA_SYNC_CHANNEL = 'ocr-traceability-run-sync';
+const OCR_STATION_LOCK_TIMEOUT_MS = 2 * 60 * 1000;
+const SCAN_DEBOUNCE_MS = 350;
+
+const SCANNER_BAUD_KEY = 'ocr-scanner-baud-rate';
+const DEFAULT_SCANNER_BAUD = 115200;
+const OCR_KEYBOARD_SCANNER_TIMEOUT_MS = 80;
+
+type ScannerRoute = 'lrm' | 'cartridge';
+type ScannerSerialStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+type ScannerSerialState = {
+  status: ScannerSerialStatus;
+  message: string;
+  portLabel: string;
+  lastScan?: string;
+};
+
+
+type StationRole = 'full' | 'lrm' | 'cartridge';
+
+function readStationRoleFromUrl(): StationRole {
+  const station = new URLSearchParams(window.location.search).get('station');
+  if (station === 'cartridge') return 'cartridge';
+  if (station === 'lrm') return 'lrm';
+  return 'full';
+}
+
+let stationRole: StationRole = readStationRoleFromUrl();
+let lastOcrFocusedSequence: string | null = null;
+let betaSequenceCalloutGeneration = 0;
+
+// Important: do not persist this in sessionStorage. Some browsers clone sessionStorage
+// into popup windows, which makes both stations think they are the same source and
+// causes BroadcastChannel sync updates to be ignored.
+const STATION_ID = `station-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+type BetaWorkflowPhase = 'lrm_pairing' | 'cartridge_ocr';
+type BetaSpecialAction = 'mark_failed' | 'recover_missing' | 'post_ocr_reject' | null;
 
 // ---------- DOM ----------
 const body = document.body;
@@ -154,6 +201,9 @@ const betaActiveLyoValueEl = document.getElementById('betaActiveLyoValue') as HT
 const betaExpectedSequenceValueEl = document.getElementById(
   'betaExpectedSequenceValue',
 ) as HTMLDivElement | null;
+const betaExpectedSequenceLabelEl = document.getElementById(
+  'betaExpectedSequenceLabel',
+) as HTMLDivElement | null;
 const betaActiveMissingSequencesValueEl = document.getElementById(
   'betaActiveMissingSequencesValue',
 ) as HTMLDivElement | null;
@@ -164,6 +214,13 @@ const betaShroudScanInputEl = document.getElementById(
   'betaShroudScanInput',
 ) as HTMLInputElement | null;
 const betaLrmScanInputEl = document.getElementById('betaLrmScanInput') as HTMLInputElement | null;
+const betaSequenceScanLabelEl = document.querySelector(
+  'label[for="betaShroudScanInput"]',
+) as HTMLLabelElement | null;
+const betaLrmScanLabelEl = document.querySelector(
+  'label[for="betaLrmScanInput"]',
+) as HTMLLabelElement | null;
+let betaWorkflowPhaseSelectEl: HTMLSelectElement | null = null;
 const betaActiveMissingSequencesInputEl = document.getElementById(
   'betaActiveMissingSequencesInput',
 ) as HTMLInputElement | null;
@@ -183,6 +240,9 @@ const arduinoStatusDot = document.getElementById('arduinoStatusDot') as HTMLSpan
 const arduinoStatusText = document.getElementById('arduinoStatusText') as HTMLSpanElement | null;
 const arduinoConnectionMenuBtn = document.getElementById(
   'arduinoConnectionMenuBtn',
+) as HTMLButtonElement | null;
+const singleWindowModeMenuBtn = document.getElementById(
+  'singleWindowModeMenuBtn',
 ) as HTMLButtonElement | null;
 const arduinoModal = document.getElementById('arduinoModal') as HTMLDivElement | null;
 const arduinoModalBackdrop = document.getElementById(
@@ -421,19 +481,41 @@ async function maybeAdvanceBetaAfterPcbConfirmation(row: HTMLTableRowElement) {
   if (!betaRowTopIsVerified(row)) return false;
 
   const completedSequence = betaCurrentUnit.expectedSequence;
+  lastOcrFocusedSequence = completedSequence;
+
+  const idStr = row.dataset.scanId;
+  if (idStr) {
+    await db.update(Number(idStr), {
+      workflowStatus: 'complete',
+      leakTestStatus: 'pass',
+      lockedByStation: undefined,
+      lockedAt: undefined,
+    });
+    notifyRunDataChanged('cartridge-complete');
+  }
 
   showBetaRowStatus(row, 'Complete', 'ok');
   setBetaRowActive(row, false);
 
-  advanceBetaSequence();
+  if (getBetaWorkflowPhase() === 'lrm_pairing') {
+    advanceBetaSequence();
+    ensureBetaActiveRow();
+  }
+
   resetBetaInputsAfterCompletion();
   betaCurrentUnit = null;
   armedRow = null;
   state = 'WAITING_QR';
+  setBetaStep('scan_shroud');
 
-  ensureBetaActiveRow();
+  if (getBetaWorkflowPhase() === 'cartridge_ocr') {
+    await renderBetaTableForActiveRun();
+  }
+
   updateStatus(
-    `Traceability row complete for ${completedSequence}. Scan next shroud QR.`,
+    getBetaWorkflowPhase() === 'cartridge_ocr'
+      ? `Cartridge OCR complete for ${completedSequence}. Scan next passing unit Sequence QR.`
+      : `Traceability row complete for ${completedSequence}. Scan next Sequence QR.`,
     'success',
   );
   return true;
@@ -602,7 +684,7 @@ if (setupBtn && badge) {
 }
 
 // ---------- Global app mode ----------
-let currentAppMode: AppMode = (localStorage.getItem(APP_MODE_KEY) as AppMode) || 'standard';
+let currentAppMode: AppMode = 'traceability_beta';
 
 // ---------- State machine ----------
 type FSM = 'IDLE' | 'ARMED' | 'PRESENT' | 'SCANNING' | 'WAITING_QR' | 'WAITING_LRM' | 'COOLDOWN';
@@ -626,12 +708,135 @@ type BetaUnit = {
   shroudRaw: string | null;
   lrm: string | null;
   row: HTMLTableRowElement;
+  recordId?: number;
+  recovered?: boolean;
 };
 
 let betaCurrentUnit: BetaUnit | null = null;
+let betaSpecialAction: BetaSpecialAction = null;
+let lastScanSignature = '';
+let lastScanAt = 0;
+let lrmStatusMirrorObserverReady = false;
+
+// Prevent overlapping cross-window refreshes from appending duplicate visual rows.
+// OCR and Gemini code is intentionally untouched by this fix.
+let betaTableRenderGeneration = 0;
 
 // ---------- DB ----------
 const db = new DB();
+
+function showStartupError(error: unknown, context = 'Startup') {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`${context} error:`, error);
+  try {
+    applyAppModeUI();
+    updateStatus(`${context} error: ${message}. Open DevTools console for details.`, 'error');
+  } catch {
+    // If the UI is not ready, avoid masking the original error.
+  }
+}
+
+window.addEventListener('error', (event) => {
+  showStartupError(event.error ?? event.message, 'Runtime');
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  showStartupError(event.reason, 'Async runtime');
+});
+
+// ---------- Cross-window run sync ----------
+const runSyncChannel: BroadcastChannel | null =
+  typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(BETA_SYNC_CHANNEL) : null;
+
+function notifyRunDataChanged(reason: string) {
+  try {
+    runSyncChannel?.postMessage({
+      type: 'run-data-changed',
+      runId: getBetaRunId(),
+      source: STATION_ID,
+      reason,
+      at: Date.now(),
+    });
+  } catch (err) {
+    console.warn('Run sync broadcast failed', err);
+  }
+}
+
+function notifyStationModeCommand(action: 'single-window') {
+  try {
+    runSyncChannel?.postMessage({
+      type: 'station-mode-command',
+      action,
+      runId: getBetaRunId(),
+      source: STATION_ID,
+      at: Date.now(),
+    });
+  } catch (err) {
+    console.warn('Station mode broadcast failed', err);
+  }
+}
+
+async function refreshFromExternalRunUpdate(reason = 'external update') {
+  if (currentAppMode !== 'traceability_beta' || !hasActiveBetaRun()) return;
+  if (hasUnsafeLocalBetaWorkInProgress()) {
+    await updateBetaRunSummary();
+    return;
+  }
+
+  await renderBetaTableForActiveRun();
+  updateBetaRunUI();
+  refreshBetaEnhancementPanel();
+  await updateBetaRunSummary();
+
+  if (isCartridgeStation()) {
+    updateStatus('Run table updated from LRM Pairing Station. Scan passing unit Sequence QR.', 'info');
+  } else if (isLrmOnlyStation()) {
+    updateStatus('Run table updated from Cartridge OCR Station. Continue LRM pairing.', 'info');
+  } else if (reason) {
+    updateStatus('Run table updated from another station.', 'info');
+  }
+}
+
+runSyncChannel?.addEventListener('message', (event) => {
+  const message = event.data;
+  if (!message || message.source === STATION_ID) return;
+
+  const activeRunId = getBetaRunId();
+  if (activeRunId && message.runId && activeRunId !== message.runId) return;
+
+  if (message.type === 'run-data-changed') {
+    void refreshFromExternalRunUpdate(message.reason);
+    return;
+  }
+
+  if (message.type === 'station-mode-command' && message.action === 'single-window') {
+    if (isCartridgeStation()) {
+      if (window.opener) {
+        window.close();
+      } else {
+        void enterSingleWindowStationMode(false);
+      }
+      return;
+    }
+
+    if (isLrmOnlyStation()) {
+      void enterSingleWindowStationMode(false);
+    }
+  }
+});
+
+window.addEventListener('storage', (event) => {
+  if (!event.key) return;
+  if (
+    event.key === BETA_RUN_ID_KEY ||
+    event.key === BETA_BUILD_KEY ||
+    event.key === BETA_LYO_KEY ||
+    event.key === BETA_NEXT_SEQUENCE_KEY ||
+    event.key.startsWith(`${BETA_QR_INFO_MAP_KEY}:`)
+  ) {
+    void refreshFromExternalRunUpdate('storage update');
+  }
+});
 
 // ---------- Helpers ----------
 function padNum(n: number, width: number) {
@@ -777,6 +982,584 @@ function normalizeScannerText(raw: string | null | undefined) {
   return (raw ?? '').trim().toUpperCase();
 }
 
+function getBetaWorkflowPhase(): BetaWorkflowPhase {
+  if (isCartridgeStation()) return 'cartridge_ocr';
+  if (isLrmOnlyStation()) return 'lrm_pairing';
+  const saved = localStorage.getItem(BETA_WORKFLOW_PHASE_KEY);
+  return saved === 'cartridge_ocr' ? 'cartridge_ocr' : 'lrm_pairing';
+}
+
+function setBetaWorkflowPhase(phase: BetaWorkflowPhase) {
+  if (!isCartridgeStation() && !isLrmOnlyStation()) {
+    localStorage.setItem(BETA_WORKFLOW_PHASE_KEY, phase);
+  }
+}
+
+function setStationRoleUrlParam(role: StationRole) {
+  const url = new URL(window.location.href);
+  if (role === 'full') url.searchParams.delete('station');
+  else url.searchParams.set('station', role);
+
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  window.history.replaceState(null, '', nextUrl);
+}
+
+function hasUnsafeLocalBetaWorkInProgress() {
+  if (scanInFlight || getPendingPcbConfirmationRow()) return true;
+  if (!betaCurrentUnit) return false;
+
+  // In LRM Pairing Station, an empty next row is safe to rebuild when the OCR
+  // station broadcasts updates. Do not rebuild only when the operator has
+  // already captured part of a local pair.
+  if (getBetaWorkflowPhase() === 'lrm_pairing') {
+    return Boolean(betaCurrentUnit.shroudRaw || betaCurrentUnit.lrm);
+  }
+
+  // In Cartridge OCR Station, a loaded row means the station may be waiting for
+  // the sensor/OCR/correction flow. Do not overwrite that local state.
+  return true;
+}
+
+function normalizeLookupKey(value: string | null | undefined) {
+  return (value ?? '').trim().toUpperCase();
+}
+
+function getBetaQrInfoMap(): Record<string, string> {
+  try {
+    const scopedKey = getBetaQrInfoStorageKey();
+    const raw = localStorage.getItem(scopedKey) ?? localStorage.getItem(BETA_QR_INFO_MAP_KEY) ?? '{}';
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function setBetaQrInfoMap(map: Record<string, string>) {
+  localStorage.setItem(getBetaQrInfoStorageKey(), JSON.stringify(map));
+}
+
+function getImportedCustomerQr(sequenceLabel: string) {
+  const map = getBetaQrInfoMap();
+  const direct = map[normalizeLookupKey(sequenceLabel)];
+  if (direct) return direct;
+
+  const sequenceNum = expectedSequenceNumericValue(sequenceLabel);
+  if (sequenceNum === null) return '';
+
+  for (const [label, qr] of Object.entries(map)) {
+    if (expectedSequenceNumericValue(label) === sequenceNum) return qr;
+  }
+
+  return '';
+}
+
+function extractCustomerQrSequence(qrCode: string) {
+  const zPart = qrCode
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reverse()
+    .find((part) => /^Z\d+$/i.test(part));
+  return zPart ?? '';
+}
+
+function getBetaMixwheelLot() {
+  return localStorage.getItem(BETA_MIXWHEEL_LOT_KEY) ?? '';
+}
+
+function getBetaSampleCapLot() {
+  return localStorage.getItem(BETA_SAMPLE_CAP_LOT_KEY) ?? '';
+}
+
+function setBetaMaterialLots(mixwheelLot: string, sampleCapLot: string) {
+  localStorage.setItem(BETA_MIXWHEEL_LOT_KEY, mixwheelLot.trim());
+  localStorage.setItem(BETA_SAMPLE_CAP_LOT_KEY, sampleCapLot.trim());
+}
+
+function createBetaRunId(build: string, lyo: string) {
+  const safeBuild = build.trim() || 'build';
+  const safeLyo = lyo.trim().replace(/[^a-z0-9_-]+/gi, '_') || 'lyo';
+  return `${safeBuild}-${safeLyo}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+}
+
+function getBetaRunId() {
+  return localStorage.getItem(BETA_RUN_ID_KEY) ?? '';
+}
+
+function setBetaRunId(runId: string) {
+  localStorage.setItem(BETA_RUN_ID_KEY, runId);
+}
+
+function getBetaQrInfoStorageKey() {
+  const runId = getBetaRunId();
+  return runId ? `${BETA_QR_INFO_MAP_KEY}:${runId}` : BETA_QR_INFO_MAP_KEY;
+}
+
+function getStationLabel() {
+  if (stationRole === 'cartridge') return 'Cartridge OCR Station';
+  if (stationRole === 'lrm') return 'LRM Pairing Station';
+  return 'Single-Window Station';
+}
+
+function isCartridgeStation() {
+  return stationRole === 'cartridge';
+}
+
+function isLrmOnlyStation() {
+  return stationRole === 'lrm';
+}
+
+function shouldIgnoreDuplicateScan(source: string, raw: string) {
+  const now = performance.now();
+  const signature = `${stationRole}|${source}|${normalizeScannerText(raw)}`;
+  if (signature && signature === lastScanSignature && now - lastScanAt < SCAN_DEBOUNCE_MS) {
+    return true;
+  }
+  lastScanSignature = signature;
+  lastScanAt = now;
+  return false;
+}
+
+
+function scannerSerialAvailable() {
+  return typeof navigator !== 'undefined' && 'serial' in navigator;
+}
+
+function getScannerBaudRate() {
+  const selected = Number((document.getElementById('scannerSerialBaudSelect') as HTMLSelectElement | null)?.value);
+  const saved = Number(localStorage.getItem(SCANNER_BAUD_KEY));
+  const baud = Number.isFinite(selected) && selected > 0 ? selected : saved;
+  return Number.isFinite(baud) && baud > 0 ? baud : DEFAULT_SCANNER_BAUD;
+}
+
+function getSerialPortLabel(port: SerialPort | null) {
+  if (!port) return 'No port selected';
+  const info = port.getInfo?.();
+  if (info?.usbVendorId || info?.usbProductId) {
+    const vendor = info.usbVendorId ? `VID ${info.usbVendorId.toString(16).toUpperCase()}` : 'VID unknown';
+    const product = info.usbProductId ? `PID ${info.usbProductId.toString(16).toUpperCase()}` : 'PID unknown';
+    return `${vendor} / ${product}`;
+  }
+  return 'Selected scanner serial port';
+}
+
+class ScannerSerialReader {
+  private port: SerialPort | null = null;
+  private reader: ReadableStreamDefaultReader<string> | null = null;
+  private decoder: TextDecoderStream | null = null;
+  private decoderPipe: Promise<void> | null = null;
+  private activeLoop: Promise<void> | null = null;
+  private open = false;
+
+  constructor(private readonly route: ScannerRoute) { }
+
+  get isOpen() {
+    return this.open;
+  }
+
+  get label() {
+    return this.route === 'lrm' ? 'LRM Pairing Scanner' : 'Cartridge OCR Scanner';
+  }
+
+  get portLabel() {
+    return getSerialPortLabel(this.port);
+  }
+
+  async connect(baudRate = getScannerBaudRate()) {
+    if (!scannerSerialAvailable()) {
+      updateScannerSerialState(this.route, {
+        status: 'error',
+        message: 'Web Serial unavailable',
+        portLabel: 'No port selected',
+      });
+      updateStatus('Web Serial is not available in this browser/build. Use Chrome/Electron with serial support.', 'error');
+      return;
+    }
+
+    await this.disconnect(false);
+    updateScannerSerialState(this.route, {
+      status: 'connecting',
+      message: `Selecting ${this.label}...`,
+      portLabel: 'No port selected',
+    });
+
+    try {
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate });
+      if (!port.readable) throw new Error('SCANNER_STREAM_UNAVAILABLE');
+
+      this.port = port;
+      this.decoder = new TextDecoderStream();
+      this.decoderPipe = (port.readable as ReadableStream<Uint8Array>)
+        .pipeTo(this.decoder.writable as WritableStream<Uint8Array>)
+        .catch(() => {
+          // Expected during disconnect/unplug.
+        });
+      this.reader = this.decoder.readable.getReader();
+      this.open = true;
+
+      updateScannerSerialState(this.route, {
+        status: 'connected',
+        message: `Connected at ${baudRate} baud`,
+        portLabel: this.portLabel,
+      });
+      updateStatus(`${this.label} connected. Scans from this COM port will route even when the window is not focused.`, 'success');
+
+      this.activeLoop = this.readLoop();
+      void this.activeLoop;
+    } catch (error) {
+      console.error(`${this.label} connection failed`, error);
+      await this.disconnect(false);
+      const msg = error instanceof Error && error.message.includes('No port selected')
+        ? 'Scanner selection canceled'
+        : 'Could not open scanner COM port';
+      updateScannerSerialState(this.route, {
+        status: error instanceof Error && error.message.includes('No port selected') ? 'disconnected' : 'error',
+        message: msg,
+        portLabel: 'No port selected',
+      });
+      updateStatus(`${this.label}: ${msg}.`, error instanceof Error && error.message.includes('No port selected') ? 'warn' : 'error');
+    }
+  }
+
+  private async readLoop() {
+    const reader = this.reader;
+    if (!reader) return;
+
+    let buffer = '';
+
+    try {
+      for (; ;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value ?? '';
+
+        let match = buffer.match(/[\r\n]/);
+        while (match && match.index !== undefined) {
+          const line = buffer.slice(0, match.index).trim();
+          buffer = buffer.slice(match.index + 1);
+          if (line) {
+            updateScannerSerialState(this.route, {
+              status: 'connected',
+              message: 'Scan received',
+              portLabel: this.portLabel,
+              lastScan: line,
+            });
+            await routeSerialScannerScan(this.route, line);
+          }
+          match = buffer.match(/[\r\n]/);
+        }
+
+        if (buffer.length > 4096) buffer = buffer.slice(-1024);
+      }
+    } catch (error) {
+      console.warn(`${this.label} read loop stopped`, error);
+    } finally {
+      if (this.open) {
+        this.open = false;
+        updateScannerSerialState(this.route, {
+          status: 'disconnected',
+          message: 'Disconnected',
+          portLabel: 'No port selected',
+        });
+      }
+    }
+  }
+
+  async disconnect(showMessage = true) {
+    this.open = false;
+    const reader = this.reader;
+    const decoderPipe = this.decoderPipe;
+    const port = this.port;
+
+    this.reader = null;
+    this.decoder = null;
+    this.decoderPipe = null;
+    this.activeLoop = null;
+    this.port = null;
+
+    if (reader) {
+      try { await reader.cancel(); } catch { }
+      try { reader.releaseLock(); } catch { }
+    }
+    if (decoderPipe) {
+      try { await Promise.race([decoderPipe, new Promise((resolve) => setTimeout(resolve, 500))]); } catch { }
+    }
+    if (port) {
+      try { await port.close(); } catch { }
+    }
+
+    updateScannerSerialState(this.route, {
+      status: 'disconnected',
+      message: 'Disconnected',
+      portLabel: 'No port selected',
+    });
+    if (showMessage) updateStatus(`${this.label} disconnected.`, 'info');
+  }
+}
+
+const scannerSerialReaders: Record<ScannerRoute, ScannerSerialReader> = {
+  lrm: new ScannerSerialReader('lrm'),
+  cartridge: new ScannerSerialReader('cartridge'),
+};
+
+const scannerSerialStates: Record<ScannerRoute, ScannerSerialState> = {
+  lrm: { status: 'disconnected', message: 'Disconnected', portLabel: 'No port selected' },
+  cartridge: { status: 'disconnected', message: 'Disconnected', portLabel: 'No port selected' },
+};
+
+let ocrKeyboardScannerBuffer = '';
+let ocrKeyboardScannerLastKeyAt = 0;
+
+function updateScannerSerialState(route: ScannerRoute, patch: Partial<ScannerSerialState>) {
+  scannerSerialStates[route] = { ...scannerSerialStates[route], ...patch };
+  refreshScannerSerialUi();
+}
+
+function setScannerInputValue(input: HTMLInputElement | null, value: string) {
+  if (!input) return;
+  input.value = value;
+}
+
+function isModalOrDialogOpen() {
+  const overrideModal = Array.from(document.querySelectorAll<HTMLElement>('body > .fixed')).some(
+    (el) => String(el.className).includes('z-[1000]') && !el.classList.contains('hidden'),
+  );
+  const arduinoModal = document.getElementById('arduinoModal');
+  return overrideModal || Boolean(arduinoModal && !arduinoModal.classList.contains('hidden'));
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null) {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
+  if (el.isContentEditable) return true;
+  return Boolean(el.closest?.('[contenteditable="true"]'));
+}
+
+async function routeKeyboardOcrScannerScan(raw: string) {
+  const value = raw.trim();
+  if (!value) return;
+  if (shouldIgnoreDuplicateScan('keyboard-ocr', value)) return;
+
+  if (currentAppMode !== 'traceability_beta') {
+    updateStatus('Keyboard OCR scanner ignored: Traceability mode is not active.', 'warn');
+    return;
+  }
+
+  if (!isCartridgeStation()) {
+    updateStatus('Keyboard OCR scanner scan ignored on this station. Keep the Cartridge OCR Station window active for the NETUM scanner.', 'warn');
+    return;
+  }
+
+  if (scanInFlight || getPendingPcbConfirmationRow()) {
+    updateStatus('Keyboard OCR scanner ignored. Finish the active cartridge OCR/PCB confirmation first.', 'warn');
+    return;
+  }
+
+  if (getBetaWorkflowPhase() !== 'cartridge_ocr') {
+    setBetaWorkflowPhase('cartridge_ocr');
+    updateBetaRunUI();
+  }
+
+  setScannerInputValue(betaShroudScanInputEl, value);
+  await handleBetaShroudScan();
+}
+
+function shouldCaptureOcrKeyboardScannerEvent(event: KeyboardEvent) {
+  if (!isCartridgeStation()) return false;
+  if (currentAppMode !== 'traceability_beta') return false;
+  if (!hasActiveBetaRun()) return false;
+  if (isModalOrDialogOpen()) return false;
+  // Let normal typing and keyboard-wedge scans flow into the focused input.
+  // The input's Enter handler will route the scan. Global capture remains active
+  // when focus is not in an editable field.
+  if (isEditableKeyboardTarget(event.target)) return false;
+  if (event.ctrlKey || event.altKey || event.metaKey) return false;
+  if (event.key === 'Shift' || event.key === 'Control' || event.key === 'Alt' || event.key === 'Meta') return false;
+  if (event.key.length === 1) return true;
+  return event.key === 'Enter';
+}
+
+function installOcrKeyboardScannerRouter() {
+  document.addEventListener(
+    'keydown',
+    (event) => {
+      if (!shouldCaptureOcrKeyboardScannerEvent(event)) return;
+
+      const now = performance.now();
+      if (now - ocrKeyboardScannerLastKeyAt > OCR_KEYBOARD_SCANNER_TIMEOUT_MS) {
+        ocrKeyboardScannerBuffer = '';
+      }
+      ocrKeyboardScannerLastKeyAt = now;
+
+      if (event.key === 'Enter') {
+        const scan = ocrKeyboardScannerBuffer.trim();
+        ocrKeyboardScannerBuffer = '';
+        if (scan) {
+          event.preventDefault();
+          event.stopPropagation();
+          void routeKeyboardOcrScannerScan(scan);
+        }
+        return;
+      }
+
+      if (event.key.length === 1) {
+        ocrKeyboardScannerBuffer += event.key;
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    },
+    true,
+  );
+}
+
+async function routeSerialScannerScan(route: ScannerRoute, raw: string) {
+  const value = raw.trim();
+  if (!value) return;
+  if (shouldIgnoreDuplicateScan(`serial-${route}`, value)) return;
+
+  if (currentAppMode !== 'traceability_beta') {
+    updateStatus(`${route === 'lrm' ? 'LRM' : 'OCR'} scanner ignored: Traceability mode is not active.`, 'warn');
+    return;
+  }
+
+  if (route === 'cartridge') {
+    if (scanInFlight || getPendingPcbConfirmationRow()) {
+      updateStatus('OCR scanner ignored. Finish the active cartridge OCR/PCB confirmation first.', 'warn');
+      return;
+    }
+    if (getBetaWorkflowPhase() !== 'cartridge_ocr' && !isLrmOnlyStation()) {
+      setBetaWorkflowPhase('cartridge_ocr');
+      updateBetaRunUI();
+    }
+    setScannerInputValue(betaShroudScanInputEl, value);
+    await handleBetaShroudScan();
+    return;
+  }
+
+  if (getBetaWorkflowPhase() !== 'lrm_pairing' && !isCartridgeStation()) {
+    setBetaWorkflowPhase('lrm_pairing');
+    updateBetaRunUI();
+  }
+
+  if (betaSpecialAction) {
+    setScannerInputValue(betaShroudScanInputEl, value);
+    await handleBetaShroudScan();
+    return;
+  }
+
+  if (betaCurrentUnit?.shroudRaw) {
+    setScannerInputValue(betaLrmScanInputEl, value);
+    await handleBetaLrmScan();
+  } else {
+    setScannerInputValue(betaShroudScanInputEl, value);
+    await handleBetaShroudScan();
+  }
+}
+
+function scannerStatusClass(status: ScannerSerialStatus) {
+  if (status === 'connected') return 'text-emerald-700';
+  if (status === 'connecting') return 'text-indigo-700';
+  if (status === 'error') return 'text-red-700';
+  return 'text-gray-600';
+}
+
+function refreshScannerSerialUi() {
+  const baudSelect = document.getElementById('scannerSerialBaudSelect') as HTMLSelectElement | null;
+  if (baudSelect) {
+    const saved = String(localStorage.getItem(SCANNER_BAUD_KEY) ?? DEFAULT_SCANNER_BAUD);
+    if (!baudSelect.value) baudSelect.value = saved;
+  }
+
+  for (const route of ['lrm', 'cartridge'] as const) {
+    const state = scannerSerialStates[route];
+    const statusEl = document.getElementById(`${route}ScannerSerialStatus`);
+    const portEl = document.getElementById(`${route}ScannerSerialPort`);
+    const lastEl = document.getElementById(`${route}ScannerSerialLast`);
+    const connectBtn = document.getElementById(`${route}ScannerConnectBtn`) as HTMLButtonElement | null;
+    const disconnectBtn = document.getElementById(`${route}ScannerDisconnectBtn`) as HTMLButtonElement | null;
+
+    if (statusEl) {
+      statusEl.textContent = state.message;
+      statusEl.className = `font-semibold ${scannerStatusClass(state.status)}`;
+    }
+    if (portEl) portEl.textContent = state.portLabel;
+    if (lastEl) lastEl.textContent = state.lastScan ? `Last scan: ${state.lastScan}` : 'Last scan: none';
+    if (connectBtn) connectBtn.disabled = scannerSerialReaders[route].isOpen || state.status === 'connecting';
+    if (disconnectBtn) disconnectBtn.disabled = !scannerSerialReaders[route].isOpen;
+  }
+}
+
+function isWorkflowStatusComplete(record: { workflowStatus?: ScanRecord['workflowStatus']; pcb?: string | null; pcbFinal?: string | null; top?: string | null; topFinal?: string | null; sequenceNumber?: string; condition?: string }) {
+  if (record.workflowStatus === 'complete' || record.workflowStatus === 'post_ocr_reject') return true;
+  if (record.workflowStatus) return false;
+
+  const pcb = record.pcbFinal ?? record.pcb ?? '';
+  const top = record.topFinal ?? record.top ?? '';
+  const seq = record.sequenceNumber ?? record.condition ?? '';
+  return (
+    isNonEmptyString(pcb) &&
+    pcb !== 'NO_CODE_FOUND' &&
+    isNonEmptyString(top) &&
+    top !== 'NO_CODE_FOUND' &&
+    topMatchesExpectedSequence(top, seq)
+  );
+}
+
+function isNonEmptyString(value: string | null | undefined) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isBetaCartridgeCompleteRecord(record: ScanRecord | { workflowStatus?: ScanRecord['workflowStatus']; pcbFinal?: string | null; pcb?: string | null; topFinal?: string | null; top?: string | null; sequenceNumber?: string; condition?: string }) {
+  return isWorkflowStatusComplete(record);
+}
+
+function sequenceScansMatch(scannedRaw: string, expectedSequence: string) {
+  const scannedNorm = normalizeScannerText(scannedRaw);
+  const expectedNorm = normalizeScannerText(expectedSequence);
+  if (scannedNorm && expectedNorm && scannedNorm === expectedNorm) return true;
+
+  const scannedNum = parseShroudQrSequence(scannedRaw);
+  const expectedNum = expectedSequenceNumericValue(expectedSequence);
+  return scannedNum !== null && expectedNum !== null && scannedNum === expectedNum;
+}
+
+function betaRecordMatchesActiveRun(record: { mode?: string; runId?: string; buildNumber?: string; lyoCondition?: string }) {
+  if (record.mode !== 'traceability_beta') return false;
+  const activeRunId = getBetaRunId().trim();
+  if (activeRunId && record.runId) return record.runId === activeRunId;
+
+  // Legacy fallback for records created before true Run ID existed.
+  const build = getBetaBuild().trim();
+  const lyo = getBetaLyo().trim();
+  if (build && (record.buildNumber ?? '').trim() !== build) return false;
+  if (lyo && (record.lyoCondition ?? '').trim() !== lyo) return false;
+  return true;
+}
+
+async function findBetaRecordBySequenceScan(scannedRaw: string) {
+  const records = await db.getAll();
+  const matches = records
+    .filter(betaRecordMatchesActiveRun)
+    .filter((record) => sequenceScansMatch(scannedRaw, record.sequenceNumber ?? record.condition ?? ''));
+
+  return pickBestBetaRecord(matches);
+}
+
+async function findBetaRecordByLrm(lrm: string) {
+  const lrmNorm = normalizeScannerText(lrm);
+  if (!lrmNorm) return undefined;
+
+  const records = await db.getAll();
+  return records
+    .filter(betaRecordMatchesActiveRun)
+    .filter((record) => normalizeScannerText(record.lrm) === lrmNorm)
+    .sort((a, b) => b.ts - a.ts)[0];
+}
+
 function isLikelyDuplicateQrAtLrmStep(
   lrmRaw: string,
   shroudRaw: string | null,
@@ -797,6 +1580,32 @@ function isLikelyDuplicateQrAtLrmStep(
   return matchesRawQr || matchesParsedQrSequence || matchesExpectedSequence;
 }
 
+function scrollTableRowIntoView(
+  row: HTMLTableRowElement | null,
+  block: ScrollLogicalPosition = 'nearest',
+) {
+  const target = tableScrollContainer;
+  if (!target || !row) return;
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      row.scrollIntoView({
+        behavior: 'smooth',
+        block,
+        inline: 'nearest',
+      });
+    });
+  });
+}
+
+function scrollTableToSequence(sequence: string | null, block: ScrollLogicalPosition = 'center') {
+  if (!sequence) return false;
+  const row = getBetaTableRowBySequence(sequence);
+  if (!row) return false;
+  scrollTableRowIntoView(row, block);
+  return true;
+}
+
 function scrollTableToBottom() {
   const target = tableScrollContainer;
   if (!target) return;
@@ -806,16 +1615,29 @@ function scrollTableToBottom() {
       const lastRow = tableBody.querySelector('tr:last-child') as HTMLTableRowElement | null;
 
       if (lastRow) {
-        lastRow.scrollIntoView({
-          behavior: 'smooth',
-          block: 'end',
-          inline: 'nearest',
-        });
+        scrollTableRowIntoView(lastRow, 'end');
       } else {
         target.scrollTop = target.scrollHeight;
       }
     });
   });
+}
+
+function shouldPreserveOcrTableFocus() {
+  return (
+    currentAppMode === 'traceability_beta' &&
+    (isCartridgeStation() || (!isLrmOnlyStation() && getBetaWorkflowPhase() === 'cartridge_ocr'))
+  );
+}
+
+function scrollBetaTableAfterRender() {
+  if (shouldPreserveOcrTableFocus() && scrollTableToSequence(lastOcrFocusedSequence, 'center')) {
+    return;
+  }
+
+  if (getBetaWorkflowPhase() === 'lrm_pairing' || isLrmOnlyStation()) {
+    scrollTableToBottom();
+  }
 }
 
 function getOcrMaxAttempts() {
@@ -987,8 +1809,8 @@ function updateRunUI() {
   if (activeMissingCartridgesInputEl) {
     activeMissingCartridgesInputEl.value = active
       ? getRunMissingNumbers()
-          .map((n) => padNum(n, getRunPad()))
-          .join(', ')
+        .map((n) => padNum(n, getRunPad()))
+        .join(', ')
       : '';
   }
 }
@@ -1178,29 +2000,1219 @@ function clearBetaRunStateOnly() {
   localStorage.removeItem(BETA_LYO_KEY);
   localStorage.removeItem(BETA_NEXT_SEQUENCE_KEY);
   localStorage.removeItem(BETA_MISSING_KEY);
+  localStorage.removeItem(BETA_RUN_ID_KEY);
   betaCurrentUnit = null;
   state = 'IDLE';
 }
 
+function ensureBetaWorkflowPhaseControl() {
+  if (betaWorkflowPhaseSelectEl) return betaWorkflowPhaseSelectEl;
+
+  const currentStepBlock = betaCurrentStepValueEl?.parentElement;
+  if (!currentStepBlock) return null;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'mt-3 rounded-md border border-indigo-100 bg-white/70 p-2';
+  wrapper.innerHTML = `
+    <label for="betaWorkflowPhaseSelect" class="block text-xs font-semibold text-gray-500 uppercase tracking-wide">
+      Workflow Stage
+    </label>
+    <select id="betaWorkflowPhaseSelect" class="table-cell-input mt-2 text-sm">
+      <option value="lrm_pairing">LRM Pairing / Build LRM List</option>
+      <option value="cartridge_ocr">Cartridge OCR / Append Cartridge Data</option>
+    </select>
+    <p id="betaWorkflowPhaseHelp" class="mt-2 text-xs text-gray-500"></p>
+  `.trim();
+
+  currentStepBlock.before(wrapper);
+  betaWorkflowPhaseSelectEl = wrapper.querySelector('#betaWorkflowPhaseSelect');
+
+  betaWorkflowPhaseSelectEl?.addEventListener('change', () => {
+    void (async () => {
+      const nextPhase =
+        betaWorkflowPhaseSelectEl?.value === 'cartridge_ocr' ? 'cartridge_ocr' : 'lrm_pairing';
+      betaSpecialAction = null;
+      setBetaWorkflowPhase(nextPhase);
+      betaCurrentUnit = null;
+      armedRow = null;
+      scanInFlight = false;
+      state = 'WAITING_QR';
+      resetBetaInputsAfterCompletion();
+
+      await renderBetaTableForActiveRun();
+      updateBetaRunUI();
+      resetOcrPreviews();
+      updateStatus(
+        nextPhase === 'lrm_pairing'
+          ? `LRM Pairing active. Next LRM sequence: ${getBetaExpectedSequence()}. Scan Sequence QR.`
+          : 'Cartridge OCR active. Scan the outside Sequence QR on a passing leak-tested assembly.',
+        'info',
+      );
+    })();
+  });
+
+  return betaWorkflowPhaseSelectEl;
+}
+
+function updateBetaWorkflowPhaseHelp() {
+  const phase = getBetaWorkflowPhase();
+  const help = document.getElementById('betaWorkflowPhaseHelp') as HTMLParagraphElement | null;
+  if (!help) return;
+
+  help.textContent =
+    phase === 'lrm_pairing'
+      ? 'Use before shrouding: scan Sequence QR, then scan exposed LRM. No cartridge OCR happens in this stage.'
+      : 'Use after shrouding + leak test: failed units are pulled; only passing units are scanned by Sequence QR for cartridge OCR.';
+}
+
+function setElementHidden(el: Element | null, hidden: boolean) {
+  if (!el) return;
+  el.classList.toggle('hidden', hidden);
+}
+
+function applyStationRoleUI() {
+  body.classList.toggle('lrm-station', isLrmOnlyStation());
+  body.classList.toggle('cartridge-station', isCartridgeStation());
+  body.classList.toggle('single-station', !isLrmOnlyStation() && !isCartridgeStation());
+
+  let banner = document.getElementById('stationRoleBanner') as HTMLDivElement | null;
+  if (!banner && traceabilityRunPanelEl) {
+    banner = document.createElement('div');
+    banner.id = 'stationRoleBanner';
+    banner.className = 'mb-3 rounded-lg border p-3 text-sm font-semibold';
+    traceabilityRunPanelEl.prepend(banner);
+  }
+
+  if (banner) {
+    banner.classList.remove('border-emerald-200', 'bg-emerald-50', 'text-emerald-800', 'border-indigo-200', 'bg-indigo-50', 'text-indigo-800', 'border-slate-200', 'bg-slate-50', 'text-slate-800');
+    if (isCartridgeStation()) {
+      banner.classList.add('border-emerald-200', 'bg-emerald-50', 'text-emerald-800');
+      banner.textContent = 'CARTRIDGE OCR STATION — scan passing unit Sequence QR, then place cartridge for OCR.';
+    } else if (isLrmOnlyStation()) {
+      banner.classList.add('border-indigo-200', 'bg-indigo-50', 'text-indigo-800');
+      banner.textContent = 'LRM PAIRING STATION — scan Sequence QR, then exposed LRM. Cameras and Arduino are released for OCR station.';
+    } else {
+      banner.classList.add('border-slate-200', 'bg-slate-50', 'text-slate-800');
+      banner.textContent = 'SINGLE-WINDOW STATION — use workflow stage selector, or open a dedicated Cartridge OCR Station.';
+    }
+  }
+
+  const cameraPanels = Array.from(document.querySelectorAll('main > section.bg-white'));
+  for (const panel of cameraPanels) setElementHidden(panel, isLrmOnlyStation());
+
+  const appModePanel = appModeSelectEl?.closest('.rounded-lg') ?? null;
+  setElementHidden(appModePanel, isLrmOnlyStation());
+
+  if (isLrmOnlyStation()) {
+    try { stopAllCameraStreams?.(); } catch { }
+    ensureLrmOperatorDock();
+  }
+
+  if (betaWorkflowPhaseSelectEl) {
+    betaWorkflowPhaseSelectEl.value = getBetaWorkflowPhase();
+    betaWorkflowPhaseSelectEl.disabled = isCartridgeStation() || isLrmOnlyStation();
+  }
+
+  document.title = `${getStationLabel()} - Smart Cartridge Build Tracker`;
+}
+
+function enterLrmPairingStationMode() {
+  stationRole = 'lrm';
+  setStationRoleUrlParam('lrm');
+  betaSpecialAction = null;
+  betaCurrentUnit = null;
+  armedRow = null;
+  scanInFlight = false;
+  state = 'WAITING_QR';
+  try { stopAllCameraStreams?.(); } catch { }
+  try { void disconnectArduino?.(); } catch { }
+  applyStationRoleUI();
+  updateBetaRunUI();
+  setBetaStep('scan_shroud');
+  updateStatus('LRM Pairing Station active. Cartridge OCR runs in the popup window.', 'success');
+}
+
+function openCartridgeOcrStation() {
+  const url = new URL(window.location.href);
+  url.searchParams.set('station', 'cartridge');
+  const popup = window.open(url.toString(), 'cartridgeOcrStation', 'popup=yes,width=1400,height=900');
+  if (!popup) {
+    updateStatus('Popup blocked. Allow popups, then try Open Cartridge OCR Station again.', 'error');
+    return;
+  }
+
+  enterLrmPairingStationMode();
+  popup.focus();
+}
+
+async function enterSingleWindowStationMode(broadcast = true) {
+  if (broadcast) notifyStationModeCommand('single-window');
+
+  stationRole = 'full';
+  setStationRoleUrlParam('full');
+  betaSpecialAction = null;
+  betaCurrentUnit = null;
+  armedRow = null;
+  scanInFlight = false;
+  state = 'WAITING_QR';
+
+  applyStationRoleUI();
+
+  try {
+    await initWebcams();
+    wireCropControls();
+  } catch (error) {
+    showStartupError(error, 'Single-window camera startup');
+  }
+
+  updateBetaRunUI();
+  setBetaStep('scan_shroud');
+  resetOcrPreviews();
+  updateStatus('Single-Window Station active. Use Workflow Stage to switch between LRM Pairing and Cartridge OCR.', 'success');
+}
+
+function getTraceabilityScanGrid() {
+  if (!traceabilityActiveEl) return null;
+  return (
+    document.getElementById('lrmDockScanGrid')?.querySelector('.lrm-sticky-scan-grid') ??
+    traceabilityActiveEl.querySelector(':scope > .mt-4.grid')
+  ) as HTMLDivElement | null;
+}
+
+function ensureLrmOperatorDock() {
+  if (!isLrmOnlyStation()) return;
+  if (!traceabilityRunPanelEl || !traceabilityActiveEl) return;
+
+  const aside = traceabilityRunPanelEl.closest('aside');
+  const statusContainer = document.getElementById('status-container');
+  if (!aside || !statusContainer) return;
+
+  let dock = document.getElementById('lrmOperatorDock') as HTMLDivElement | null;
+  if (!dock) {
+    dock = document.createElement('div');
+    dock.id = 'lrmOperatorDock';
+    dock.className = 'lrm-operator-dock';
+    dock.innerHTML = `
+      <div class="lrm-dock-topline">
+        <div class="min-w-0">
+          <div class="lrm-dock-badge">LRM Pairing Station</div>
+          <div class="lrm-dock-title">Next LRM: <span id="lrmDockExpectedSequence">—</span></div>
+          <div class="lrm-dock-subtitle">Step: <span id="lrmDockCurrentStep">—</span></div>
+        </div>
+        <div id="lrmDockSummary" class="lrm-dock-summary">No active run</div>
+        <div class="lrm-dock-actions">
+          <button id="lrmDockMarkFailedBtn" type="button" class="lrm-dock-action lrm-dock-action-danger">Mark Failed / Pulled</button>
+          <button id="lrmDockRecoverMissingBtn" type="button" class="lrm-dock-action lrm-dock-action-warn">Recover Missing</button>
+          <button id="lrmDockOpenOcrBtn" type="button" class="lrm-dock-action lrm-dock-action-success">Open OCR Station</button>
+          <button id="lrmDockToggleToolsBtn" type="button" class="lrm-dock-action lrm-dock-action-muted">Run Tools</button>
+        </div>
+      </div>
+      <div id="lrmDockScanGrid" class="lrm-dock-scan-grid"></div>
+      <div id="lrmDockStatus" class="lrm-dock-status">Ready.</div>
+    `.trim();
+    aside.insertBefore(dock, statusContainer);
+
+    (dock.querySelector('#lrmDockMarkFailedBtn') as HTMLButtonElement | null)?.addEventListener('click', () => setBetaSpecialAction('mark_failed'));
+    (dock.querySelector('#lrmDockRecoverMissingBtn') as HTMLButtonElement | null)?.addEventListener('click', () => setBetaSpecialAction('recover_missing'));
+    (dock.querySelector('#lrmDockOpenOcrBtn') as HTMLButtonElement | null)?.addEventListener('click', openCartridgeOcrStation);
+    (dock.querySelector('#lrmDockToggleToolsBtn') as HTMLButtonElement | null)?.addEventListener('click', () => {
+      const details = document.getElementById('betaRunToolsDetails') as HTMLDetailsElement | null;
+      if (details) {
+        details.open = !details.open;
+        details.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      const panel = document.getElementById('betaEnhancementPanel');
+      panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
+
+  const scanGrid =
+    (document.getElementById('lrmDockScanGrid')?.querySelector('.lrm-sticky-scan-grid') as HTMLDivElement | null) ??
+    (traceabilityActiveEl.querySelector(':scope > .mt-4.grid') as HTMLDivElement | null);
+  const dockScanGrid = document.getElementById('lrmDockScanGrid') as HTMLDivElement | null;
+  if (scanGrid && dockScanGrid && scanGrid.parentElement !== dockScanGrid) {
+    scanGrid.classList.add('lrm-sticky-scan-grid');
+    dockScanGrid.appendChild(scanGrid);
+  }
+
+  const activeSummary = traceabilityActiveEl.querySelector(':scope > .flex') as HTMLDivElement | null;
+  let setupDetails = document.getElementById('lrmSetupDetails') as HTMLDetailsElement | null;
+  if (!setupDetails) {
+    setupDetails = document.createElement('details');
+    setupDetails.id = 'lrmSetupDetails';
+    setupDetails.className = 'lrm-setup-details';
+    setupDetails.innerHTML = `
+      <summary>
+        <span>Run setup / missing sequence details</span>
+        <span class="lrm-setup-summary-help">Open only when editing run setup or missing sequence list.</span>
+      </summary>
+      <div id="lrmSetupDetailsBody" class="lrm-setup-details-body"></div>
+    `.trim();
+    traceabilityRunPanelEl.appendChild(setupDetails);
+  }
+
+  const setupBody = document.getElementById('lrmSetupDetailsBody');
+  if (activeSummary && setupBody && activeSummary.parentElement !== setupBody) {
+    setupBody.appendChild(activeSummary);
+  }
+
+  if (!lrmStatusMirrorObserverReady) {
+    const statusMessage = document.getElementById('status-message');
+    if (statusMessage) {
+      const observer = new MutationObserver(() => refreshLrmOperatorDock());
+      observer.observe(statusMessage, { childList: true, subtree: true, characterData: true });
+      lrmStatusMirrorObserverReady = true;
+    }
+  }
+
+  refreshLrmOperatorDock();
+}
+
+function refreshLrmOperatorDock(summaryText?: string) {
+  if (!isLrmOnlyStation()) return;
+
+  const expectedEl = document.getElementById('lrmDockExpectedSequence');
+  const stepEl = document.getElementById('lrmDockCurrentStep');
+  const summaryEl = document.getElementById('lrmDockSummary');
+  const statusEl = document.getElementById('lrmDockStatus');
+  const statusMessage = document.getElementById('status-message');
+
+  if (expectedEl) expectedEl.textContent = hasActiveBetaRun() ? getBetaExpectedSequence() : 'No active run';
+  if (stepEl) stepEl.textContent = betaCurrentStepValueEl?.textContent?.trim() || '—';
+  if (summaryEl && summaryText) summaryEl.textContent = summaryText;
+  if (statusEl && statusMessage) statusEl.textContent = statusMessage.textContent?.trim() || 'Ready.';
+}
+
+function ensureTraceabilityEnhancementPanel() {
+  if (document.getElementById('betaEnhancementPanel')) return;
+  if (!traceabilityRunPanelEl) return;
+
+  const panel = document.createElement('div');
+  panel.id = 'betaEnhancementPanel';
+  panel.className = 'mt-3 rounded-lg border border-slate-200 bg-white p-3 space-y-3';
+  panel.className = 'mt-3 rounded-xl border border-slate-200 bg-white p-4 space-y-4 lrm-run-tools';
+  panel.innerHTML = `
+    <details id="betaRunToolsDetails" class="run-tools-details">
+      <summary class="run-tools-heading flex flex-wrap items-center justify-between gap-3 cursor-pointer">
+        <div>
+          <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Run Tools</div>
+          <div class="text-base font-bold text-gray-900">QR import, material lots, failures, backup</div>
+        </div>
+        <div class="flex items-center gap-3 flex-wrap">
+          <div id="betaRunSummary" class="run-summary-pill text-xs font-semibold text-gray-700">No active run</div>
+          <span class="run-tools-toggle text-xs font-bold text-indigo-700">Open / Close</span>
+        </div>
+      </summary>
+
+      <div class="run-tools-grid grid grid-cols-1 xl:grid-cols-3 gap-4 mt-4">
+      <div class="run-tool-card qr-import-card rounded-lg border border-indigo-100 bg-indigo-50/40 p-4">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <label for="betaQrImportText" class="block text-xs font-bold text-indigo-800 uppercase tracking-wide">
+              Customer QR Info Import
+            </label>
+            <p class="mt-1 text-xs text-indigo-700/80">Paste from Excel/CSV or load CSV/TXT.</p>
+          </div>
+          <span id="betaQrImportStatus" class="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-indigo-700 shadow-sm">No QR info imported.</span>
+        </div>
+        <textarea
+          id="betaQrImportText"
+          class="table-cell-input mt-3 min-h-[92px] text-xs font-mono bg-white"
+          placeholder="Paste QR info from Excel/CSV. Expected columns include Label and QR code."
+        ></textarea>
+        <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <button id="betaImportQrBtn" type="button" class="rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700">
+            Import QR Info
+          </button>
+          <label class="rounded-md border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 cursor-pointer text-center">
+            Load CSV/TXT
+            <input id="betaQrFileInput" type="file" accept=".csv,.txt" class="hidden" />
+          </label>
+          <button id="betaClearQrBtn" type="button" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50">
+            Clear QR Import
+          </button>
+        </div>
+      </div>
+
+      <div class="run-tool-card material-lot-card rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div class="text-xs font-bold text-slate-700 uppercase tracking-wide">Material Lots / Batches</div>
+        <p class="mt-1 text-xs text-slate-500">Changes apply to future rows only.</p>
+        <div class="mt-3 grid grid-cols-1 gap-3">
+          <div>
+            <label for="betaMixwheelLotInput" class="block text-xs font-semibold text-gray-500 uppercase tracking-wide">Mixwheel Lot/Batch</label>
+            <input id="betaMixwheelLotInput" type="text" class="table-cell-input mt-1.5 bg-white" placeholder="Example: 10300617" />
+          </div>
+          <div>
+            <label for="betaSampleCapLotInput" class="block text-xs font-semibold text-gray-500 uppercase tracking-wide">Sample Cap Lot/Batch</label>
+            <input id="betaSampleCapLotInput" type="text" class="table-cell-input mt-1.5 bg-white" placeholder="Example: 10289762" />
+          </div>
+        </div>
+        <button id="betaUpdateLotsBtn" type="button" class="mt-3 w-full rounded-md bg-slate-700 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800">
+          Update Lots For Future Rows
+        </button>
+      </div>
+
+      <div class="run-tool-card action-card rounded-lg border border-emerald-100 bg-emerald-50/40 p-4">
+        <div class="text-xs font-bold text-emerald-800 uppercase tracking-wide">Production Actions</div>
+        <p class="mt-1 text-xs text-emerald-700/80">Use these when a unit changes status outside normal scan flow.</p>
+        <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <button id="betaMarkFailedBtn" type="button" class="rounded-md bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700">
+            Mark Failed / Pulled
+          </button>
+          <button id="betaRecoverMissingBtn" type="button" class="rounded-md bg-amber-500 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-600">
+            Recover Missing
+          </button>
+          <button id="betaPostOcrRejectBtn" type="button" class="rounded-md bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-700">
+            Post-OCR Reject
+          </button>
+          <button id="betaOpenCartridgeStationBtn" type="button" class="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700">
+            Open Cartridge OCR Station
+          </button>
+        </div>
+        <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <button id="betaSaveBackupBtn" type="button" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50">
+            Save Run Backup
+          </button>
+          <button id="betaLoadBackupBtn" type="button" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50">
+            Load Run Backup
+          </button>
+          <input id="betaBackupFileInput" type="file" accept=".json,application/json" class="hidden" />
+        </div>
+        <p class="mt-3 text-xs text-gray-600">
+          Failed units are pulled and locked out of cartridge OCR. Recovered missing units return to LRM pairing.
+        </p>
+      </div>
+
+      <div class="run-tool-card scanner-serial-card rounded-lg border border-cyan-100 bg-cyan-50/40 p-4 xl:col-span-3">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div class="text-xs font-bold text-cyan-800 uppercase tracking-wide">Serial Scanner Routing</div>
+            <p class="mt-1 text-xs text-cyan-700/80">Use when scanners are configured as USB COM / Virtual Serial devices. Scans route by COM port, not by active input focus.</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <label for="scannerSerialBaudSelect" class="text-xs font-semibold text-cyan-800">Baud</label>
+            <select id="scannerSerialBaudSelect" class="table-cell-input !w-auto bg-white text-xs py-1.5">
+              <option value="115200">115200</option>
+              <option value="9600">9600</option>
+              <option value="57600">57600</option>
+              <option value="38400">38400</option>
+            </select>
+          </div>
+        </div>
+        <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div class="rounded-lg border border-white/80 bg-white p-3">
+            <div class="text-xs font-bold text-gray-700 uppercase tracking-wide">LRM Pairing Scanner</div>
+            <div id="lrmScannerSerialStatus" class="mt-1 text-sm font-semibold text-gray-600">Disconnected</div>
+            <div id="lrmScannerSerialPort" class="mt-1 text-xs text-gray-500">No port selected</div>
+            <div id="lrmScannerSerialLast" class="mt-1 text-xs text-gray-500">Last scan: none</div>
+            <div class="mt-3 flex gap-2">
+              <button id="lrmScannerConnectBtn" type="button" class="rounded-md bg-cyan-700 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-800">Connect LRM Scanner</button>
+              <button id="lrmScannerDisconnectBtn" type="button" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50">Disconnect</button>
+            </div>
+          </div>
+          <div class="rounded-lg border border-white/80 bg-white p-3">
+            <div class="text-xs font-bold text-gray-700 uppercase tracking-wide">Cartridge OCR Scanner</div>
+            <div class="mt-1 text-sm font-semibold text-emerald-700">NETUM keyboard mode supported</div>
+            <div class="mt-1 text-xs text-gray-600">Keep this Cartridge OCR Station window active. Scans are captured by the station, not by a specific input field.</div>
+            <div id="cartridgeScannerSerialStatus" class="mt-2 text-xs font-semibold text-gray-600">Optional serial: Disconnected</div>
+            <div id="cartridgeScannerSerialPort" class="mt-1 text-xs text-gray-500">No port selected</div>
+            <div id="cartridgeScannerSerialLast" class="mt-1 text-xs text-gray-500">Last serial scan: none</div>
+            <div class="mt-3 flex gap-2">
+              <button id="cartridgeScannerConnectBtn" type="button" class="rounded-md border border-cyan-300 bg-white px-3 py-2 text-xs font-semibold text-cyan-800 hover:bg-cyan-50">Optional COM OCR Scanner</button>
+              <button id="cartridgeScannerDisconnectBtn" type="button" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50">Disconnect</button>
+            </div>
+          </div>
+        </div>
+        <div class="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+          <div class="font-bold">Hybrid mode recommended for your current setup:</div>
+          <div>Connect the KEYENCE COM port as the LRM Pairing Scanner. Leave the NETUM in keyboard mode and keep the Cartridge OCR Station window active. The OCR station captures the full scanner entry globally, so the operator does not need to click the scan input each time.</div>
+        </div>
+      </div>
+    </details>
+  `.trim();
+
+  traceabilityRunPanelEl.appendChild(panel);
+
+  const importBtn = panel.querySelector('#betaImportQrBtn') as HTMLButtonElement | null;
+  const clearQrBtn = panel.querySelector('#betaClearQrBtn') as HTMLButtonElement | null;
+  const qrFileInput = panel.querySelector('#betaQrFileInput') as HTMLInputElement | null;
+  const updateLotsBtn = panel.querySelector('#betaUpdateLotsBtn') as HTMLButtonElement | null;
+  const markFailedBtn = panel.querySelector('#betaMarkFailedBtn') as HTMLButtonElement | null;
+  const recoverMissingBtn = panel.querySelector('#betaRecoverMissingBtn') as HTMLButtonElement | null;
+  const postOcrRejectBtn = panel.querySelector('#betaPostOcrRejectBtn') as HTMLButtonElement | null;
+  const openCartridgeStationBtn = panel.querySelector('#betaOpenCartridgeStationBtn') as HTMLButtonElement | null;
+  const saveBackupBtn = panel.querySelector('#betaSaveBackupBtn') as HTMLButtonElement | null;
+  const loadBackupBtn = panel.querySelector('#betaLoadBackupBtn') as HTMLButtonElement | null;
+  const backupFileInput = panel.querySelector('#betaBackupFileInput') as HTMLInputElement | null;
+  const scannerBaudSelect = panel.querySelector('#scannerSerialBaudSelect') as HTMLSelectElement | null;
+  const lrmScannerConnectBtn = panel.querySelector('#lrmScannerConnectBtn') as HTMLButtonElement | null;
+  const lrmScannerDisconnectBtn = panel.querySelector('#lrmScannerDisconnectBtn') as HTMLButtonElement | null;
+  const cartridgeScannerConnectBtn = panel.querySelector('#cartridgeScannerConnectBtn') as HTMLButtonElement | null;
+  const cartridgeScannerDisconnectBtn = panel.querySelector('#cartridgeScannerDisconnectBtn') as HTMLButtonElement | null;
+
+  importBtn?.addEventListener('click', () => {
+    const text = (document.getElementById('betaQrImportText') as HTMLTextAreaElement | null)?.value ?? '';
+    importBetaQrInfoText(text);
+  });
+
+  clearQrBtn?.addEventListener('click', () => {
+    if (!window.confirm('Clear imported customer QR info for this browser?')) return;
+    setBetaQrInfoMap({});
+    notifyRunDataChanged('qr-info-cleared');
+    refreshBetaEnhancementPanel();
+    void updateBetaRunSummary();
+    updateStatus('Imported QR info cleared.', 'info');
+  });
+
+  qrFileInput?.addEventListener('change', () => {
+    const file = qrFileInput.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = typeof reader.result === 'string' ? reader.result : '';
+      const textarea = document.getElementById('betaQrImportText') as HTMLTextAreaElement | null;
+      if (textarea) textarea.value = text;
+      importBetaQrInfoText(text);
+      qrFileInput.value = '';
+    };
+    reader.readAsText(file);
+  });
+
+  updateLotsBtn?.addEventListener('click', () => {
+    const mixwheelLot = (document.getElementById('betaMixwheelLotInput') as HTMLInputElement | null)?.value ?? '';
+    const sampleCapLot = (document.getElementById('betaSampleCapLotInput') as HTMLInputElement | null)?.value ?? '';
+    setBetaMaterialLots(mixwheelLot, sampleCapLot);
+    notifyRunDataChanged('material-lots-updated');
+    updateStatus('Material lots updated. New values will apply to future rows only.', 'success');
+    refreshBetaEnhancementPanel();
+  });
+
+  markFailedBtn?.addEventListener('click', () => setBetaSpecialAction('mark_failed'));
+  recoverMissingBtn?.addEventListener('click', () => setBetaSpecialAction('recover_missing'));
+  postOcrRejectBtn?.addEventListener('click', () => setBetaSpecialAction('post_ocr_reject'));
+  openCartridgeStationBtn?.addEventListener('click', openCartridgeOcrStation);
+  saveBackupBtn?.addEventListener('click', () => void saveBetaRunBackup());
+  loadBackupBtn?.addEventListener('click', () => backupFileInput?.click());
+
+  scannerBaudSelect?.addEventListener('change', () => {
+    localStorage.setItem(SCANNER_BAUD_KEY, scannerBaudSelect.value);
+    updateStatus(`Scanner baud rate set to ${scannerBaudSelect.value}. Reconnect scanner ports to apply it.`, 'info');
+  });
+
+  lrmScannerConnectBtn?.addEventListener('click', () => void scannerSerialReaders.lrm.connect());
+  lrmScannerDisconnectBtn?.addEventListener('click', () => void scannerSerialReaders.lrm.disconnect());
+  cartridgeScannerConnectBtn?.addEventListener('click', () => void scannerSerialReaders.cartridge.connect());
+  cartridgeScannerDisconnectBtn?.addEventListener('click', () => void scannerSerialReaders.cartridge.disconnect());
+
+  backupFileInput?.addEventListener('change', () => {
+    const file = backupFileInput.files?.[0];
+    if (!file) return;
+    void loadBetaRunBackupFromFile(file).finally(() => {
+      backupFileInput.value = '';
+    });
+  });
+
+  refreshBetaEnhancementPanel();
+}
+
+function refreshBetaEnhancementPanel() {
+  const qrStatus = document.getElementById('betaQrImportStatus') as HTMLDivElement | null;
+  const mixwheelInput = document.getElementById('betaMixwheelLotInput') as HTMLInputElement | null;
+  const sampleInput = document.getElementById('betaSampleCapLotInput') as HTMLInputElement | null;
+
+  if (mixwheelInput && document.activeElement !== mixwheelInput) mixwheelInput.value = getBetaMixwheelLot();
+  if (sampleInput && document.activeElement !== sampleInput) sampleInput.value = getBetaSampleCapLot();
+
+  if (qrStatus) {
+    const count = Object.keys(getBetaQrInfoMap()).length;
+    qrStatus.textContent = count ? `${count} customer QR labels imported.` : 'No QR info imported.';
+  }
+
+  refreshScannerSerialUi();
+}
+
+function splitDelimitedLine(line: string, delimiter: ',' | '\t') {
+  if (delimiter === '\t') return line.split('\t').map((cell) => cell.trim());
+
+  const cells: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    const next = line[i + 1];
+
+    if (ch === '"' && inQuotes && next === '"') {
+      cell += '"';
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (ch === ',' && !inQuotes) {
+      cells.push(cell.trim());
+      cell = '';
+      continue;
+    }
+
+    cell += ch;
+  }
+
+  cells.push(cell.trim());
+  return cells;
+}
+
+function looksLikeSequenceLabel(value: string) {
+  return /ME-\d+.*\d+$/i.test(value.trim()) || /^Z\d+$/i.test(value.trim());
+}
+
+function looksLikeCustomerQr(value: string) {
+  return /Z\d{3,}/i.test(value) || /^CI\d+/i.test(value.trim()) || value.split(',').length >= 3;
+}
+
+function parseBetaQrImportRows(text: string) {
+  const lines = text
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const imported: Record<string, string> = {};
+  const errors: string[] = [];
+  if (!lines.length) return { imported, errors: ['No QR import rows found.'] };
+
+  const delimiter: ',' | '\t' = lines.some((line) => line.includes('\t')) ? '\t' : ',';
+  const firstCells = splitDelimitedLine(lines[0], delimiter);
+  const lowerHeaders = firstCells.map((cell) => cell.trim().toLowerCase());
+  const hasHeader = lowerHeaders.some((cell) => cell.includes('label') || cell.includes('qr'));
+  const labelIndex = hasHeader
+    ? lowerHeaders.findIndex((cell) => cell.includes('label') || cell.includes('sequence'))
+    : -1;
+  const qrIndex = hasHeader
+    ? lowerHeaders.findIndex((cell) => cell.includes('qr'))
+    : -1;
+
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+
+  dataLines.forEach((line, index) => {
+    const cells = splitDelimitedLine(line, delimiter);
+    let label = '';
+    let qr = '';
+
+    if (labelIndex >= 0 && labelIndex < cells.length) label = cells[labelIndex]?.trim() ?? '';
+    if (qrIndex >= 0 && qrIndex < cells.length) {
+      qr = cells.slice(qrIndex).join(delimiter === ',' ? ',' : '\t').trim();
+    }
+
+    if (!label || !qr) {
+      const labelCell = cells.find(looksLikeSequenceLabel) ?? '';
+      const labelCellIndex = cells.findIndex((cell) => cell === labelCell);
+      label = label || labelCell;
+
+      if (labelCellIndex >= 0) {
+        const qrCandidate = cells
+          .filter((_, cellIndex) => cellIndex !== labelCellIndex)
+          .find(looksLikeCustomerQr);
+        qr = qr || qrCandidate || cells.slice(labelCellIndex + 1).join(delimiter === ',' ? ',' : '\t').trim();
+      }
+    }
+
+    if (!label || !qr) {
+      errors.push(`Row ${index + 1}: missing label or QR code.`);
+      return;
+    }
+
+    imported[normalizeLookupKey(label)] = qr;
+  });
+
+  return { imported, errors };
+}
+
+function importBetaQrInfoText(text: string) {
+  const { imported, errors } = parseBetaQrImportRows(text);
+  const count = Object.keys(imported).length;
+
+  if (!count) {
+    updateStatus(errors[0] ?? 'No QR info imported. Check the pasted columns.', 'error');
+    refreshBetaEnhancementPanel();
+    return;
+  }
+
+  setBetaQrInfoMap({ ...getBetaQrInfoMap(), ...imported });
+  refreshBetaEnhancementPanel();
+  void updateBetaRunSummary();
+
+  const errorText = errors.length ? ` ${errors.length} row(s) skipped.` : '';
+  notifyRunDataChanged('qr-info-imported');
+  updateStatus(`Imported ${count} customer QR label mapping(s).${errorText}`, errors.length ? 'warn' : 'success');
+}
+
+function setBetaSpecialAction(action: Exclude<BetaSpecialAction, null>) {
+  if (!hasActiveBetaRun()) {
+    updateStatus('Start or load a traceability run first.', 'error');
+    return;
+  }
+
+  betaSpecialAction = action;
+  betaCurrentUnit = null;
+  armedRow = null;
+  scanInFlight = false;
+  state = 'WAITING_QR';
+  resetBetaInputsAfterCompletion();
+  setBetaStep('scan_shroud');
+
+  if (action === 'mark_failed') {
+    updateStatus('Failure mode active. Scan the Sequence QR from the failed/pulled assembly.', 'warn');
+  } else if (action === 'post_ocr_reject') {
+    updateStatus('Post-OCR Reject mode active. Scan the Sequence QR for the completed assembly to reject.', 'warn');
+  } else {
+    updateStatus('Recover Missing mode active. Scan the Sequence QR that was previously marked missing.', 'warn');
+  }
+}
+
+function clearBetaSpecialAction() {
+  betaSpecialAction = null;
+  setBetaStep('scan_shroud');
+}
+
+function isBetaRecordActionableForOcr(record: ScanRecord) {
+  if (!isNonEmptyString(record.lrm)) return false;
+  if (record.leakTestStatus === 'fail') return false;
+
+  if (
+    record.workflowStatus === 'complete' ||
+    record.workflowStatus === 'post_ocr_reject' ||
+    record.workflowStatus === 'failed_pulled' ||
+    record.workflowStatus === 'missing' ||
+    record.workflowStatus === 'recovered_waiting_lrm'
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function pickNextBetaOcrRecord(records: ScanRecord[]) {
+  return records
+    .filter(isBetaRecordActionableForOcr)
+    .sort((a, b) => {
+      const seqDiff = betaRecordSortValue(a) - betaRecordSortValue(b);
+      if (seqDiff !== 0) return seqDiff;
+      return (a.ts ?? 0) - (b.ts ?? 0);
+    })[0];
+}
+
+function betaSequenceCalloutMode(): 'lrm' | 'ocr' {
+  if (isCartridgeStation()) return 'ocr';
+  if (!isLrmOnlyStation() && getBetaWorkflowPhase() === 'cartridge_ocr') return 'ocr';
+  return 'lrm';
+}
+
+async function updateBetaSequenceCallout() {
+  const generation = ++betaSequenceCalloutGeneration;
+  const active = hasActiveBetaRun();
+  const mode = betaSequenceCalloutMode();
+
+  if (betaExpectedSequenceLabelEl) {
+    betaExpectedSequenceLabelEl.textContent = mode === 'ocr' ? 'Next OCR Sequence' : 'Next LRM Sequence';
+  }
+
+  if (!betaExpectedSequenceValueEl) return;
+
+  betaExpectedSequenceValueEl.classList.remove('text-emerald-700', 'text-rose-700', 'text-amber-700');
+  betaExpectedSequenceValueEl.classList.add('text-indigo-700');
+
+  if (!active) {
+    betaExpectedSequenceValueEl.textContent = mode === 'ocr' ? 'No active run' : 'Z0000000001';
+    return;
+  }
+
+  if (mode === 'lrm') {
+    betaExpectedSequenceValueEl.textContent = getBetaExpectedSequence();
+    return;
+  }
+
+  const records = await getActiveRunBetaRecords();
+  if (generation !== betaSequenceCalloutGeneration) return;
+
+  const nextOcrRecord = pickNextBetaOcrRecord(records);
+  const nextOcrSequence = nextOcrRecord ? getBetaRecordSequence(nextOcrRecord) : '';
+
+  betaExpectedSequenceValueEl.classList.remove('text-indigo-700');
+  betaExpectedSequenceValueEl.classList.add(nextOcrSequence ? 'text-emerald-700' : 'text-amber-700');
+  betaExpectedSequenceValueEl.textContent = nextOcrSequence || 'No OCR-ready pairs';
+}
+
+async function updateBetaRunSummary() {
+  const summary = document.getElementById('betaRunSummary') as HTMLDivElement | null;
+  if (!summary) return;
+
+  if (!hasActiveBetaRun()) {
+    summary.textContent = 'No active run';
+    refreshLrmOperatorDock('No active run');
+    return;
+  }
+
+  const records = await getActiveRunBetaRecords();
+  const postReject = records.filter((record) => record.workflowStatus === 'post_ocr_reject').length;
+  const complete = records.filter((record) => record.workflowStatus === 'complete').length;
+  const failed = records.filter((record) => record.leakTestStatus === 'fail' || record.workflowStatus === 'failed_pulled').length;
+  const paired = records.filter((record) => isNonEmptyString(record.lrm)).length;
+  const pending = records.filter(
+    (record) => isNonEmptyString(record.lrm) && record.leakTestStatus !== 'fail' && !isBetaCartridgeCompleteRecord(record),
+  ).length;
+  const missing = getBetaMissingNumbers().length;
+  const importedQr = Object.keys(getBetaQrInfoMap()).length;
+
+  const summaryText = `Paired ${paired} • Pending ${pending} • Complete ${complete} • Failed ${failed} • Post-OCR Reject ${postReject} • Missing ${missing} • QR ${importedQr}`;
+  summary.textContent = summaryText;
+  refreshLrmOperatorDock(summaryText);
+}
+
+function updateBetaLeakCell(row: HTMLTableRowElement, status: ScanRecord['leakTestStatus']) {
+  const leakCell = row.querySelector('.beta-leak-cell') as HTMLElement | null;
+  if (!leakCell) return;
+
+  leakCell.classList.remove('text-emerald-700', 'text-rose-700', 'text-gray-700', 'font-semibold');
+
+  if (status === 'pass') {
+    leakCell.textContent = 'PASS';
+    leakCell.classList.add('text-emerald-700', 'font-semibold');
+  } else if (status === 'fail') {
+    leakCell.textContent = 'FAIL';
+    leakCell.classList.add('text-rose-700', 'font-semibold');
+  } else {
+    leakCell.textContent = 'Pending';
+    leakCell.classList.add('text-gray-700');
+  }
+}
+
+async function markBetaRecordFailed(record: ScanRecord, reason?: string) {
+  if (!record.id) return false;
+
+  if (isBetaCartridgeCompleteRecord(record)) {
+    updateStatus(`Sequence ${record.sequenceNumber} already has cartridge data. Failure mark is blocked.`, 'error');
+    return false;
+  }
+
+  const failureReason = reason ?? window.prompt('Failure reason:', 'Mixwheel Leak Test Fail')?.trim();
+  if (!failureReason) {
+    updateStatus('Failure mark canceled. No reason entered.', 'info');
+    return false;
+  }
+
+  await db.update(record.id, {
+    workflowStatus: 'failed_pulled',
+    leakTestStatus: 'fail',
+    failureTs: Date.now(),
+    failureReason,
+    pcb: null,
+    top: null,
+    pcbFinal: null,
+    topFinal: null,
+    pcbConf: 0,
+    topConf: 0,
+    pcbHist: {},
+    topHist: {},
+    lockedByStation: undefined,
+    lockedAt: undefined,
+  });
+
+  const updated = await db.get(record.id);
+  const sequence = getBetaRecordSequence(updated ?? record);
+  let row = getBetaTableRowBySequence(sequence);
+  if (!row) {
+    row = createBetaTableRow({
+      build: getBetaRecordBuild(updated ?? record),
+      lyoCondition: getBetaRecordLyo(updated ?? record),
+      expectedSequence: sequence,
+    });
+  }
+  if (updated) populateBetaTableRowFromRecord(row, updated);
+
+  if (betaCurrentUnit?.expectedSequence === sequence) {
+    betaCurrentUnit = null;
+    armedRow = null;
+  }
+
+  await updateBetaRunSummary();
+  notifyRunDataChanged('marked-failed-pulled');
+  return true;
+}
+
+async function handleBetaMarkFailedScan(scannedRaw: string) {
+  const record = await findBetaRecordBySequenceScan(scannedRaw);
+  if (!record) {
+    updateStatus('Sequence not found in this run. Pair the LRM first before marking failed.', 'error');
+    return;
+  }
+
+  if (record.leakTestStatus === 'fail') {
+    updateStatus(`Sequence ${record.sequenceNumber} is already marked Failed / Pulled.`, 'info');
+    clearBetaSpecialAction();
+    return;
+  }
+
+  const confirmed = window.confirm(`Mark ${record.sequenceNumber} as Failed / Pulled? This will lock it out of Cartridge OCR.`);
+  if (!confirmed) {
+    updateStatus('Failure mark canceled.', 'info');
+    clearBetaSpecialAction();
+    return;
+  }
+
+  const marked = await markBetaRecordFailed(record);
+  clearBetaSpecialAction();
+  if (marked) updateStatus(`Marked ${record.sequenceNumber} as Failed / Pulled. Scan next unit.`, 'success');
+}
+
+async function handleBetaPostOcrRejectScan(scannedRaw: string) {
+  const record = await findBetaRecordBySequenceScan(scannedRaw);
+  if (!record || !record.id) {
+    updateStatus('Sequence not found in this run. Cannot mark post-OCR reject.', 'error');
+    clearBetaSpecialAction();
+    return;
+  }
+
+  if (!isBetaCartridgeCompleteRecord(record)) {
+    updateStatus(`Sequence ${record.sequenceNumber} is not complete yet. Use Mark Failed/Pulled before cartridge OCR, or complete OCR first.`, 'error');
+    clearBetaSpecialAction();
+    return;
+  }
+
+  const reason = window.prompt('Post-OCR reject reason:', 'Motor Test Fail')?.trim();
+  if (!reason) {
+    updateStatus('Post-OCR reject canceled. No reason entered.', 'info');
+    clearBetaSpecialAction();
+    return;
+  }
+
+  await db.update(record.id, {
+    workflowStatus: 'post_ocr_reject',
+    postOcrRejectTs: Date.now(),
+    postOcrRejectReason: reason,
+    lockedByStation: undefined,
+    lockedAt: undefined,
+  });
+
+  const updated = await db.get(record.id);
+  const sequence = getBetaRecordSequence(updated ?? record);
+  let row = getBetaTableRowBySequence(sequence);
+  if (!row) {
+    row = createBetaTableRow({
+      build: getBetaRecordBuild(updated ?? record),
+      lyoCondition: getBetaRecordLyo(updated ?? record),
+      expectedSequence: sequence,
+    });
+  }
+  if (updated) populateBetaTableRowFromRecord(row, updated);
+
+  await updateBetaRunSummary();
+  notifyRunDataChanged('post-ocr-reject');
+  clearBetaSpecialAction();
+  updateStatus(`Marked ${sequence} as Post-OCR Reject. Cartridge data preserved and export will flag it.`, 'success');
+}
+
+function removeBetaMissingNumber(sequenceNum: number) {
+  const updated = getBetaMissingNumbers().filter((n) => n !== sequenceNum);
+  setBetaMissingNumbers(updated);
+  updateBetaRunUI();
+}
+
+async function beginRecoveredMissingSequence(scannedRaw: string) {
+  const parsedSequence = parseShroudQrSequence(scannedRaw);
+  if (parsedSequence === null) {
+    updateStatus('Could not read a sequence number from the recovered Sequence QR.', 'error');
+    return false;
+  }
+
+  if (!isBetaMissingSequenceNumber(parsedSequence)) {
+    updateStatus(`${formatBetaSequenceNumber(parsedSequence, getBetaExpectedSequence())} is not currently marked missing.`, 'error');
+    return false;
+  }
+
+  const sequenceLabel = formatBetaSequenceNumber(parsedSequence, getBetaExpectedSequence());
+  const existing = await findBetaRecordBySequenceScan(sequenceLabel);
+  if (existing) {
+    updateStatus(`Sequence ${sequenceLabel} already exists in the run table. It cannot be recovered as missing.`, 'error');
+    return false;
+  }
+
+  // Do not remove from the missing list until the recovered LRM pair is actually saved.
+  clearBetaRowActiveStates();
+
+  const row = createBetaTableRow({
+    build: getBetaBuild(),
+    lyoCondition: getBetaLyo(),
+    expectedSequence: sequenceLabel,
+  });
+
+  betaCurrentUnit = {
+    build: getBetaBuild(),
+    lyoCondition: getBetaLyo(),
+    expectedSequence: sequenceLabel,
+    shroudRaw: scannedRaw,
+    lrm: null,
+    row,
+    recovered: true,
+  };
+
+  row.dataset.shroud = scannedRaw;
+  showBetaRowStatus(row, 'Recovered - scan LRM', 'ok');
+  setBetaRowActive(row, true);
+  resetBetaInputsAfterCompletion();
+  setBetaStep('scan_lrm');
+  state = 'WAITING_LRM';
+  await updateBetaRunSummary();
+  updateStatus(`Recovered ${sequenceLabel}. Scan exposed LRM now.`, 'success');
+  return true;
+}
+
+async function handleBetaRecoverMissingScan(scannedRaw: string) {
+  const recovered = await beginRecoveredMissingSequence(scannedRaw);
+  clearBetaSpecialAction();
+  if (recovered) setBetaStep('scan_lrm');
+}
+
+async function resolvePendingBeforeCartridgeOcr(targetRecord: ScanRecord) {
+  const targetSequenceNum = expectedSequenceNumericValue(getBetaRecordSequence(targetRecord));
+  if (targetSequenceNum === null) return true;
+
+  while (true) {
+    const records = await getActiveRunBetaRecords();
+    const pendingBefore = records
+      .filter((record) => {
+        const seqNum = expectedSequenceNumericValue(getBetaRecordSequence(record));
+        return (
+          seqNum !== null &&
+          seqNum < targetSequenceNum &&
+          isNonEmptyString(record.lrm) &&
+          record.leakTestStatus !== 'fail' &&
+          !isBetaCartridgeCompleteRecord(record)
+        );
+      })
+      .sort((a, b) => betaRecordSortValue(a) - betaRecordSortValue(b));
+
+    const firstPending = pendingBefore[0];
+    if (!firstPending) return true;
+
+    const pendingSeq = getBetaRecordSequence(firstPending);
+    const targetSeq = getBetaRecordSequence(targetRecord);
+    const markFailed = window.confirm(
+      `${pendingSeq} is still pending before ${targetSeq}.\n\nOK = mark ${pendingSeq} Failed/Pulled and continue.\nCancel = choose whether to continue out of order.`,
+    );
+
+    if (markFailed) {
+      const marked = await markBetaRecordFailed(firstPending, `Mixwheel Leak Test Fail - skipped before ${targetSeq}`);
+      if (!marked) return false;
+      continue;
+    }
+
+    const continueOutOfOrder = window.confirm(`Continue out of order with ${targetSeq} without marking ${pendingSeq} failed?`);
+    return continueOutOfOrder;
+  }
+}
+
+async function saveBetaRunBackup() {
+  if (!hasActiveBetaRun()) {
+    updateStatus('No active run to back up.', 'error');
+    return;
+  }
+
+  const records = await getActiveRunBetaRecords();
+  const backup = {
+    version: 2,
+    savedAt: new Date().toISOString(),
+    app: 'Smart Cartridge Build Tracker',
+    localStorage: {
+      [BETA_RUN_ID_KEY]: getBetaRunId(),
+      [BETA_BUILD_KEY]: getBetaBuild(),
+      [BETA_LYO_KEY]: getBetaLyo(),
+      [BETA_NEXT_SEQUENCE_KEY]: getBetaExpectedSequence(),
+      [BETA_MISSING_KEY]: JSON.stringify(getBetaMissingNumbers()),
+      [BETA_WORKFLOW_PHASE_KEY]: getBetaWorkflowPhase(),
+      [BETA_QR_INFO_MAP_KEY]: JSON.stringify(getBetaQrInfoMap()),
+      [BETA_MIXWHEEL_LOT_KEY]: getBetaMixwheelLot(),
+      [BETA_SAMPLE_CAP_LOT_KEY]: getBetaSampleCapLot(),
+      [APP_MODE_KEY]: 'traceability_beta',
+    },
+    records,
+  };
+
+  const safeLyo = getBetaLyo().replace(/[^a-z0-9_-]+/gi, '_');
+  const filename = `Build_${getBetaBuild()}_${safeLyo}_run_backup_${new Date().toISOString().slice(0, 10)}.json`;
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  updateStatus(`Run backup saved: ${filename}`, 'success');
+}
+
+async function loadBetaRunBackupFromFile(file: File) {
+  const text = await file.text();
+  let parsed: any;
+
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    updateStatus('Backup file is not valid JSON.', 'error');
+    return;
+  }
+
+  if (!parsed || !Array.isArray(parsed.records) || !parsed.localStorage) {
+    updateStatus('Backup file is missing run records or run setup data.', 'error');
+    return;
+  }
+
+  const confirmed = window.confirm('Load this run backup? Current scan records in this browser will be cleared first.');
+  if (!confirmed) {
+    updateStatus('Load backup canceled.', 'info');
+    return;
+  }
+
+  await db.clearAll();
+
+  for (const [key, value] of Object.entries(parsed.localStorage as Record<string, string>)) {
+    if (typeof value === 'string') localStorage.setItem(key, value);
+  }
+
+  localStorage.setItem(APP_MODE_KEY, 'traceability_beta');
+  currentAppMode = 'traceability_beta';
+
+  for (const record of parsed.records as ScanRecord[]) {
+    const { id: _id, ...recordWithoutId } = record as ScanRecord;
+    await db.add(recordWithoutId);
+  }
+
+  betaCurrentUnit = null;
+  armedRow = null;
+  betaSpecialAction = null;
+  state = 'WAITING_QR';
+
+  applyAppModeUI();
+  console.info(`Smart Cartridge Build Tracker loaded: ${APP_BUILD_LABEL}`);
+  updateBetaRunUI();
+  await renderBetaTableForActiveRun();
+  refreshBetaEnhancementPanel();
+  await updateBetaRunSummary();
+  notifyRunDataChanged('run-backup-loaded');
+  updateStatus(`Loaded run backup for Build ${getBetaBuild()}, ${getBetaLyo()}.`, 'success');
+}
+
+
 function setBetaStep(step: BetaStep) {
+  ensureBetaWorkflowPhaseControl();
+
+  const phase = getBetaWorkflowPhase();
+  if (betaWorkflowPhaseSelectEl) betaWorkflowPhaseSelectEl.value = phase;
+  updateBetaWorkflowPhaseHelp();
+
+  if (betaSpecialAction) {
+    if (betaSequenceScanLabelEl) {
+      betaSequenceScanLabelEl.textContent =
+        betaSpecialAction === 'mark_failed'
+          ? 'Step 1: Failed Unit Sequence QR Scan'
+          : betaSpecialAction === 'post_ocr_reject'
+            ? 'Step 1: Post-OCR Reject Sequence QR Scan'
+            : 'Step 1: Recovered Missing Sequence QR Scan';
+    }
+    if (betaLrmScanLabelEl) {
+      betaLrmScanLabelEl.textContent =
+        betaSpecialAction === 'mark_failed'
+          ? 'Step 2: Unit Pulled'
+          : betaSpecialAction === 'post_ocr_reject'
+            ? 'Step 2: Downstream Reject'
+            : 'Step 2: Scan Recovered LRM';
+    }
+    if (betaShroudScanInputEl) {
+      betaShroudScanInputEl.disabled = false;
+      betaShroudScanInputEl.placeholder =
+        betaSpecialAction === 'mark_failed'
+          ? 'Scan failed/pulled unit sequence QR...'
+          : betaSpecialAction === 'post_ocr_reject'
+            ? 'Scan post-OCR reject sequence QR...'
+            : 'Scan recovered missing sequence QR...';
+    }
+    if (betaLrmScanInputEl) {
+      betaLrmScanInputEl.disabled = true;
+      betaLrmScanInputEl.placeholder =
+        betaSpecialAction === 'mark_failed'
+          ? 'Failure mode active'
+          : betaSpecialAction === 'post_ocr_reject'
+            ? 'Post-OCR reject mode active'
+            : 'LRM scan opens after recovery';
+    }
+    if (betaCurrentStepValueEl) {
+      betaCurrentStepValueEl.textContent =
+        betaSpecialAction === 'mark_failed'
+          ? 'Scan failed unit Sequence QR'
+          : betaSpecialAction === 'post_ocr_reject'
+            ? 'Scan completed unit Sequence QR to reject'
+            : 'Scan recovered missing Sequence QR';
+    }
+    focusAndSelect(betaShroudScanInputEl);
+    refreshLrmOperatorDock();
+    return;
+  }
+
+  if (betaSequenceScanLabelEl) {
+    betaSequenceScanLabelEl.textContent =
+      phase === 'lrm_pairing' ? 'Step 1: Sequence QR Scan' : 'Step 1: Passing Unit Sequence QR Scan';
+  }
+
+  if (betaLrmScanLabelEl) {
+    betaLrmScanLabelEl.textContent =
+      phase === 'lrm_pairing' ? 'Step 2: LRM Scan' : 'Step 2: LRM Loaded From Pair';
+  }
+
+  if (betaShroudScanInputEl) {
+    betaShroudScanInputEl.placeholder =
+      phase === 'lrm_pairing' ? 'Scan sequence QR...' : 'Scan sequence QR on passing unit...';
+  }
+
+  if (betaLrmScanInputEl) {
+    betaLrmScanInputEl.placeholder =
+      phase === 'lrm_pairing' ? 'Scan exposed LRM...' : 'LRM loads from saved pair';
+  }
+
   if (!betaCurrentStepValueEl) return;
 
-  const labels: Record<BetaStep, string> = {
-    scan_shroud: 'Scan shroud QR',
-    scan_lrm: 'Scan LRM',
-    place_part: 'Place part for OCR',
-  };
+  const labels: Record<BetaStep, string> =
+    phase === 'lrm_pairing'
+      ? {
+        scan_shroud: 'Scan Sequence QR',
+        scan_lrm: 'Scan exposed LRM',
+        place_part: 'LRM pair saved',
+      }
+      : {
+        scan_shroud: 'Scan passing unit Sequence QR',
+        scan_lrm: 'LRM pair loaded',
+        place_part: 'Place cartridge for OCR',
+      };
 
   betaCurrentStepValueEl.textContent = labels[step];
 
   if (betaShroudScanInputEl) betaShroudScanInputEl.disabled = step !== 'scan_shroud';
-  if (betaLrmScanInputEl) betaLrmScanInputEl.disabled = step !== 'scan_lrm';
+  if (betaLrmScanInputEl) {
+    betaLrmScanInputEl.disabled = phase !== 'lrm_pairing' || step !== 'scan_lrm';
+  }
 
   if (step === 'scan_shroud') focusAndSelect(betaShroudScanInputEl);
-  if (step === 'scan_lrm') focusAndSelect(betaLrmScanInputEl);
+  if (phase === 'lrm_pairing' && step === 'scan_lrm') focusAndSelect(betaLrmScanInputEl);
+  refreshLrmOperatorDock();
 }
 
 function updateBetaRunUI() {
+  ensureTraceabilityEnhancementPanel();
+  if (isLrmOnlyStation()) ensureLrmOperatorDock();
+  refreshBetaEnhancementPanel();
+  void updateBetaRunSummary();
   const active = hasActiveBetaRun();
 
   if (traceabilityEmptyEl) traceabilityEmptyEl.classList.toggle('hidden', active);
@@ -1208,11 +3220,7 @@ function updateBetaRunUI() {
 
   if (betaActiveBuildValueEl) betaActiveBuildValueEl.textContent = active ? getBetaBuild() : '';
   if (betaActiveLyoValueEl) betaActiveLyoValueEl.textContent = active ? getBetaLyo() : '';
-  if (betaExpectedSequenceValueEl) {
-    betaExpectedSequenceValueEl.textContent = active ? getBetaExpectedSequence() : 'Z0000000001';
-    betaExpectedSequenceValueEl.classList.remove('text-emerald-700', 'text-rose-700');
-    betaExpectedSequenceValueEl.classList.add('text-indigo-700');
-  }
+  void updateBetaSequenceCallout();
 
   const betaSequenceTemplate = active ? getBetaExpectedSequence() : '';
 
@@ -1225,8 +3233,8 @@ function updateBetaRunUI() {
   if (betaActiveMissingSequencesInputEl) {
     betaActiveMissingSequencesInputEl.value = active
       ? getBetaMissingNumbers()
-          .map((n) => formatBetaSequenceNumber(n, betaSequenceTemplate))
-          .join(', ')
+        .map((n) => formatBetaSequenceNumber(n, betaSequenceTemplate))
+        .join(', ')
       : '';
   }
 
@@ -1234,7 +3242,7 @@ function updateBetaRunUI() {
     if (betaShroudScanInputEl) betaShroudScanInputEl.value = '';
     if (betaLrmScanInputEl) betaLrmScanInputEl.value = '';
     if (betaMissingSequencesInputEl) betaMissingSequencesInputEl.value = '';
-    if (betaCurrentStepValueEl) betaCurrentStepValueEl.textContent = 'Scan shroud QR';
+    if (betaCurrentStepValueEl) betaCurrentStepValueEl.textContent = 'Scan Sequence QR';
   } else if (betaCurrentUnit) {
     if (!betaCurrentUnit.shroudRaw) setBetaStep('scan_shroud');
     else if (!betaCurrentUnit.lrm) setBetaStep('scan_lrm');
@@ -1279,6 +3287,7 @@ function startBetaRun(
   localStorage.setItem(BETA_BUILD_KEY, build);
   localStorage.setItem(BETA_LYO_KEY, lyo);
   localStorage.setItem(BETA_NEXT_SEQUENCE_KEY, startingNext);
+  setBetaRunId(createBetaRunId(build, lyo));
 
   betaCurrentUnit = null;
   state = 'IDLE';
@@ -1373,11 +3382,12 @@ function renderTableHeaders() {
     tableHeadRowEl.innerHTML = `
     <th class="min-w-[56px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Build</th>
     <th class="min-w-[52px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Lyo</th>
-    <th class="min-w-[96px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Sequence #</th>
-    <th class="min-w-[84px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">LRM #</th>
+    <th class="min-w-[120px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Sequence #</th>
+    <th class="min-w-[120px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">LRM #</th>
+    <th class="min-w-[88px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Leak Test</th>
     <th class="min-w-[72px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">PCB #</th>
     <th class="min-w-[104px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Top Plate #</th>
-    <th class="min-w-[88px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Status</th>
+    <th class="min-w-[140px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Status</th>
     <th class="min-w-[96px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Actions</th>
   `;
   } else {
@@ -1406,8 +3416,11 @@ function applyAppModeUI() {
   traceabilityRunPanelEl?.classList.remove('hidden');
 
   if (appSubtitleEl) {
-    appSubtitleEl.textContent = 'Traceability: QR confirm → LRM → PCB OCR + top OCR verification.';
+    appSubtitleEl.textContent = `Traceability: Sequence QR + LRM pairing → leak test → passing unit cartridge OCR. ${APP_BUILD_LABEL}`;
   }
+
+  const buildBadgeEl = document.getElementById('app-build-badge');
+  if (buildBadgeEl) buildBadgeEl.textContent = APP_BUILD_LABEL;
 
   renderTableHeaders();
   resetOcrPreviews();
@@ -1449,6 +3462,19 @@ function completeBetaUnitAfterVerification(row: HTMLTableRowElement, topFinalVal
 
   setOcrPreview(2, `${topFinalValue} ✓`, 'ok', 'Top Plate / Sequence Check');
 
+  const pcbCell = row.querySelector('.beta-pcb-cell') as HTMLElement | null;
+  const pcbValue = (pcbCell?.textContent ?? '').trim();
+  if (!pcbValue || pcbValue === 'NO_CODE_FOUND') {
+    const idForPcbFail = row.dataset.scanId;
+    if (idForPcbFail) {
+      void db.update(Number(idForPcbFail), { workflowStatus: 'needs_rescan' }).then(() => notifyRunDataChanged('pcb-missing-needs-rescan'));
+    }
+    showBetaRowStatus(row, 'PCB OCR failed - rescan', 'error');
+    setBetaRowActive(row, true);
+    updateStatus('Top Plate verified, but PCB OCR is missing. Rescan OCR before completing this row.', 'error');
+    return true;
+  }
+
   if (row.dataset.pcbConfirmRequired === 'true' && row.dataset.pcbConfirmed !== 'true') {
     showBetaRowStatus(row, 'Confirm PCB');
     setBetaRowActive(row, true);
@@ -1456,20 +3482,36 @@ function completeBetaUnitAfterVerification(row: HTMLTableRowElement, topFinalVal
     return true;
   }
 
+  const idStr = row.dataset.scanId;
+  if (idStr) {
+    void db.update(Number(idStr), {
+      workflowStatus: 'complete',
+      leakTestStatus: 'pass',
+      lockedByStation: undefined,
+      lockedAt: undefined,
+    }).then(() => notifyRunDataChanged('cartridge-complete-after-top-correction'));
+  }
+
   showBetaRowStatus(row, 'Complete', 'ok');
   setBetaRowActive(row, false);
 
   if (betaCurrentUnit?.row === row) {
     const completedSequence = betaCurrentUnit.expectedSequence;
-    advanceBetaSequence();
+
+    if (getBetaWorkflowPhase() === 'lrm_pairing') {
+      advanceBetaSequence();
+      ensureBetaActiveRow();
+    }
 
     resetBetaInputsAfterCompletion();
     betaCurrentUnit = null;
     armedRow = null;
     state = 'WAITING_QR';
-    ensureBetaActiveRow();
+    setBetaStep('scan_shroud');
     updateStatus(
-      `Top Plate corrected and verified for ${completedSequence}. Scan next shroud QR.`,
+      getBetaWorkflowPhase() === 'cartridge_ocr'
+        ? `Top Plate corrected and verified for ${completedSequence}. Scan next passing unit Sequence QR.`
+        : `Top Plate corrected and verified for ${completedSequence}. Scan next Sequence QR.`,
       'success',
     );
   }
@@ -1561,7 +3603,7 @@ async function commitBetaLrmOverride(row: HTMLTableRowElement, nextValue: string
   }
 
   if (isLikelyDuplicateQrAtLrmStep(value, row.dataset.shroud ?? null, row.dataset.sequence ?? '')) {
-    updateStatus('LRM scan appears to be the shroud QR. Please scan the LRM label.', 'error');
+    updateStatus('LRM scan appears to be the Sequence QR. Please scan the LRM label.', 'error');
     return false;
   }
 
@@ -1636,6 +3678,13 @@ function startBetaLrmInlineEdit(row: HTMLTableRowElement) {
 }
 
 function createBetaTableRow(unit: Pick<BetaUnit, 'build' | 'lyoCondition' | 'expectedSequence'>) {
+  const existingRow = getBetaTableRowBySequence(unit.expectedSequence);
+  if (existingRow) {
+    existingRow.dataset.build = unit.build;
+    existingRow.dataset.lyo = unit.lyoCondition;
+    return existingRow;
+  }
+
   const row = document.createElement('tr');
   row.classList.add('hover:bg-gray-50');
   row.dataset.sequence = unit.expectedSequence;
@@ -1652,9 +3701,10 @@ function createBetaTableRow(unit: Pick<BetaUnit, 'build' | 'lyoCondition' | 'exp
   <td class="px-2 py-2 text-center align-top text-xs beta-lyo-cell">${unit.lyoCondition}</td>
   <td class="px-2 py-2 text-center align-top text-xs font-mono beta-sequence-cell">${unit.expectedSequence}</td>
   <td class="px-2 py-2 text-center align-top text-xs font-mono beta-lrm-cell break-all"></td>
+  <td class="px-2 py-2 text-center align-top text-xs beta-leak-cell break-all">Pending</td>
   <td class="px-2 py-2 text-center align-top text-xs font-mono beta-pcb-cell break-all"></td>
   <td class="px-2 py-2 text-center align-top text-xs font-mono beta-top-cell break-all"></td>
-  <td class="px-2 py-2 align-top text-center text-xs beta-status-cell text-gray-700 break-words">Waiting QR</td>
+  <td class="px-2 py-2 align-top text-center text-xs beta-status-cell text-gray-700 break-words">Waiting Sequence QR</td>
   <td class="px-1 py-2 align-top whitespace-nowrap actions-cell">
   <div class="actions-wrap flex flex-col items-center justify-center gap-1 w-full">
       <button type="button" class="beta-rescan-btn bg-gray-100 hover:bg-gray-200 rounded border px-2 py-1 text-xs">
@@ -1672,7 +3722,6 @@ function createBetaTableRow(unit: Pick<BetaUnit, 'build' | 'lyoCondition' | 'exp
 
   tableBody.appendChild(row);
   setBetaRowActive(row, true);
-  scrollTableToBottom();
 
   const lrmCell = row.querySelector('.beta-lrm-cell') as HTMLElement;
   const pcbCell = row.querySelector('.beta-pcb-cell') as HTMLElement;
@@ -1718,7 +3767,7 @@ function createBetaTableRow(unit: Pick<BetaUnit, 'build' | 'lyoCondition' | 'exp
     }
 
     if (!betaCurrentUnit.shroudRaw || !betaCurrentUnit.lrm) {
-      updateStatus('Finish QR and LRM first.', 'error');
+      updateStatus('Load Sequence QR / LRM pair first.', 'error');
       return;
     }
 
@@ -1734,8 +3783,241 @@ function createBetaTableRow(unit: Pick<BetaUnit, 'build' | 'lyoCondition' | 'exp
   return row;
 }
 
+
+function clearBetaRowActiveStates() {
+  for (const row of Array.from(tableBody.querySelectorAll<HTMLTableRowElement>('tr[data-mode="traceability_beta"]'))) {
+    setBetaRowActive(row, false);
+  }
+}
+
+function getBetaTableRowBySequence(sequence: string) {
+  const target = normalizeScannerText(sequence);
+  if (!target) return null;
+
+  return (
+    Array.from(tableBody.querySelectorAll<HTMLTableRowElement>('tr[data-mode="traceability_beta"]')).find(
+      (row) => normalizeScannerText(row.dataset.sequence) === target,
+    ) ?? null
+  );
+}
+
+function betaRecordSortValue(record: ScanRecord) {
+  return expectedSequenceNumericValue(record.sequenceNumber ?? record.condition ?? '') ?? Number.MAX_SAFE_INTEGER;
+}
+
+function betaRecordSequenceKey(record: ScanRecord | { sequenceNumber?: string; condition?: string }) {
+  return normalizeScannerText(record.sequenceNumber ?? record.condition ?? '');
+}
+
+function betaRecordPriority(record: ScanRecord) {
+  let score = 0;
+
+  if (record.workflowStatus === 'complete') score += 1000;
+  else if (record.workflowStatus === 'post_ocr_reject') score += 950;
+  else if (record.workflowStatus === 'failed_pulled' || record.leakTestStatus === 'fail') score += 900;
+  else if (
+    record.workflowStatus === 'needs_pcb_confirmation' ||
+    record.workflowStatus === 'needs_top_correction' ||
+    record.workflowStatus === 'needs_rescan'
+  ) score += 800;
+  else if (record.workflowStatus === 'ocr_in_progress') score += 700;
+  else if (record.workflowStatus === 'loaded_for_cartridge_ocr') score += 650;
+  else if (record.workflowStatus === 'lrm_paired_pending_leak') score += 500;
+  else if (record.workflowStatus === 'recovered_waiting_lrm') score += 300;
+  else if (record.workflowStatus === 'missing') score += 200;
+
+  if (isNonEmptyString(record.pcbFinal ?? record.pcb ?? '')) score += 40;
+  if (isNonEmptyString(record.topFinal ?? record.top ?? '')) score += 40;
+  if (isNonEmptyString(record.lrm)) score += 20;
+  if (record.customerQrCode) score += 5;
+
+  return score;
+}
+
+function pickBestBetaRecord(records: ScanRecord[]) {
+  return records
+    .slice()
+    .sort((a, b) => {
+      const scoreDiff = betaRecordPriority(b) - betaRecordPriority(a);
+      if (scoreDiff !== 0) return scoreDiff;
+      return (b.ts ?? 0) - (a.ts ?? 0);
+    })[0];
+}
+
+function dedupeBetaRecordsBySequence(records: ScanRecord[]) {
+  const bySequence = new Map<string, ScanRecord[]>();
+
+  for (const record of records) {
+    const key = betaRecordSequenceKey(record);
+    if (!key) continue;
+    const group = bySequence.get(key) ?? [];
+    group.push(record);
+    bySequence.set(key, group);
+  }
+
+  const bestRecords: ScanRecord[] = [];
+  for (const group of bySequence.values()) {
+    const best = pickBestBetaRecord(group);
+    if (best) bestRecords.push(best);
+  }
+
+  return bestRecords;
+}
+
+function getBetaRecordSequence(record: ScanRecord) {
+  return record.sequenceNumber ?? record.condition ?? '';
+}
+
+function getBetaRecordBuild(record: ScanRecord) {
+  return record.buildNumber ?? getBetaBuild();
+}
+
+function getBetaRecordLyo(record: ScanRecord) {
+  return record.lyoCondition ?? getBetaLyo();
+}
+
+function getBetaRecordPcbDisplay(record: ScanRecord) {
+  return record.pcbFinal ?? record.pcb ?? '';
+}
+
+function getBetaRecordTopDisplay(record: ScanRecord) {
+  return record.topFinal ?? record.top ?? '';
+}
+
+function populateBetaTableRowFromRecord(row: HTMLTableRowElement, record: ScanRecord) {
+  const sequence = getBetaRecordSequence(record);
+  const build = getBetaRecordBuild(record);
+  const lyo = getBetaRecordLyo(record);
+  const lrm = record.lrm ?? '';
+  const pcbDisplay = getBetaRecordPcbDisplay(record);
+  const topDisplay = getBetaRecordTopDisplay(record);
+  const cartridgeComplete = isBetaCartridgeCompleteRecord(record);
+
+  row.dataset.sequence = sequence;
+  row.dataset.build = build;
+  row.dataset.lyo = lyo;
+  row.dataset.shroud = record.shroudQr ?? sequence;
+  row.dataset.lrm = lrm;
+  row.dataset.mode = 'traceability_beta';
+  row.dataset.pcbConfirmRequired = 'false';
+  row.dataset.pcbConfirmed = 'true';
+  row.dataset.pcbConfirmAnswer = '';
+
+  if (record.id) row.dataset.scanId = String(record.id);
+  else delete row.dataset.scanId;
+
+  const buildCell = row.querySelector('.beta-build-cell') as HTMLElement | null;
+  const lyoCell = row.querySelector('.beta-lyo-cell') as HTMLElement | null;
+  const sequenceCell = row.querySelector('.beta-sequence-cell') as HTMLElement | null;
+  const lrmCell = row.querySelector('.beta-lrm-cell') as HTMLElement | null;
+  const leakCell = row.querySelector('.beta-leak-cell') as HTMLElement | null;
+  const pcbCell = row.querySelector('.beta-pcb-cell') as HTMLElement | null;
+  const topCell = row.querySelector('.beta-top-cell') as HTMLElement | null;
+
+  if (buildCell) buildCell.textContent = build;
+  if (lyoCell) lyoCell.textContent = lyo;
+  if (sequenceCell) sequenceCell.textContent = sequence;
+  if (lrmCell) lrmCell.textContent = lrm;
+  updateBetaLeakCell(row, record.leakTestStatus === 'fail' ? 'fail' : record.leakTestStatus === 'pass' || cartridgeComplete ? 'pass' : 'pending');
+  if (pcbCell) pcbCell.textContent = pcbDisplay;
+
+  if (topCell) {
+    topCell.textContent = topDisplay;
+    topCell.classList.remove('text-yellow-600', 'text-rose-700', 'text-emerald-700', 'font-semibold');
+
+    if (topDisplay && topDisplay !== 'NO_CODE_FOUND') {
+      if (topMatchesExpectedSequence(topDisplay, sequence)) {
+        topCell.classList.add('text-emerald-700', 'font-semibold');
+      } else {
+        topCell.classList.add('text-rose-700', 'font-semibold');
+      }
+    }
+  }
+
+  if (record.pcbOverrideReason || record.topOverrideReason) {
+    row.querySelector('.beta-override-badge')?.classList.remove('hidden');
+  } else {
+    row.querySelector('.beta-override-badge')?.classList.add('hidden');
+  }
+
+  const rescanBtn = row.querySelector('.beta-rescan-btn') as HTMLButtonElement | null;
+  if (rescanBtn) rescanBtn.disabled = record.leakTestStatus === 'fail' || record.workflowStatus === 'post_ocr_reject' || record.workflowStatus === 'complete';
+
+  if (record.workflowStatus === 'post_ocr_reject') {
+    showBetaRowStatus(row, 'Post-OCR Reject', 'error');
+  } else if (record.leakTestStatus === 'fail' || record.workflowStatus === 'failed_pulled') {
+    showBetaRowStatus(row, 'Failed / Pulled', 'error');
+  } else if (record.workflowStatus === 'ocr_in_progress') {
+    showBetaRowStatus(row, 'OCR in progress');
+  } else if (record.workflowStatus === 'loaded_for_cartridge_ocr') {
+    showBetaRowStatus(row, 'Loaded / Pending OCR');
+  } else if (record.workflowStatus === 'needs_top_correction') {
+    showBetaRowStatus(row, 'Needs Top Correction', 'error');
+  } else if (record.workflowStatus === 'needs_rescan') {
+    showBetaRowStatus(row, 'Needs Rescan', 'error');
+  } else if (record.workflowStatus === 'needs_pcb_confirmation') {
+    showBetaRowStatus(row, 'Confirm PCB');
+  } else if (cartridgeComplete) {
+    showBetaRowStatus(row, 'Complete', 'ok');
+  } else {
+    showBetaRowStatus(row, 'LRM paired / leak test pending', 'ok');
+  }
+
+  setBetaRowActive(row, false);
+}
+
+async function getActiveRunBetaRecords() {
+  const records = await db.getAll();
+  const activeRecords = records
+    .filter(betaRecordMatchesActiveRun)
+    .filter((record) => isNonEmptyString(getBetaRecordSequence(record)));
+
+  return dedupeBetaRecordsBySequence(activeRecords).sort((a, b) => {
+    const seqDiff = betaRecordSortValue(a) - betaRecordSortValue(b);
+    if (seqDiff !== 0) return seqDiff;
+    return a.ts - b.ts;
+  });
+}
+
+async function renderBetaTableForActiveRun() {
+  const renderGeneration = ++betaTableRenderGeneration;
+  const records = await getActiveRunBetaRecords();
+
+  // A newer render started while this one was waiting on IndexedDB.
+  // Letting this stale render continue would append a second copy of the list.
+  if (renderGeneration !== betaTableRenderGeneration) return;
+
+  tableBody.replaceChildren();
+  betaCurrentUnit = null;
+  armedRow = null;
+
+  for (const record of records) {
+    const sequence = getBetaRecordSequence(record);
+    const row = createBetaTableRow({
+      build: getBetaRecordBuild(record),
+      lyoCondition: getBetaRecordLyo(record),
+      expectedSequence: sequence,
+    });
+    populateBetaTableRowFromRecord(row, record);
+  }
+
+  if (hasActiveBetaRun() && getBetaWorkflowPhase() === 'lrm_pairing') {
+    ensureBetaActiveRow();
+  } else {
+    setBetaStep('scan_shroud');
+  }
+
+  scrollBetaTableAfterRender();
+  void updateBetaRunSummary();
+  void updateBetaSequenceCallout();
+}
+
 function ensureBetaActiveRow() {
   if (betaCurrentUnit) return betaCurrentUnit.row;
+  if (getBetaWorkflowPhase() === 'cartridge_ocr') {
+    setBetaStep('scan_shroud');
+    return null;
+  }
 
   const build = getBetaBuild();
   const lyoCondition = getBetaLyo();
@@ -1754,10 +4036,13 @@ function ensureBetaActiveRow() {
   };
 
   setBetaStep('scan_shroud');
+  if (getBetaWorkflowPhase() === 'lrm_pairing' || isLrmOnlyStation()) {
+    scrollTableRowIntoView(row, 'end');
+  }
   return row;
 }
 
-function resetTableForCurrentMode() {
+async function resetTableForCurrentMode() {
   tableBody.replaceChildren();
 
   if (currentAppMode === 'standard') {
@@ -1766,10 +4051,7 @@ function resetTableForCurrentMode() {
     return;
   }
 
-  if (hasActiveBetaRun()) {
-    ensureBetaActiveRow();
-  }
-
+  await renderBetaTableForActiveRun();
   resetOcrPreviews();
 }
 
@@ -1787,11 +4069,11 @@ function setAppMode(nextMode: AppMode) {
   betaCurrentUnit = null;
 
   applyAppModeUI();
-  resetTableForCurrentMode();
+  void resetTableForCurrentMode();
 
   updateStatus(
     hasActiveBetaRun()
-      ? `Traceability ready. Expected sequence: ${getBetaExpectedSequence()}`
+      ? `Traceability ready. Next LRM sequence: ${getBetaExpectedSequence()}`
       : 'Traceability selected. Enter Build, Lyo Condition, and Starting Sequence.',
     'info',
   );
@@ -2254,6 +4536,167 @@ async function runStandardScan(rowToScan: HTMLTableRowElement) {
   scanInFlight = false;
 }
 
+// ---------- Beta pairing/cartridge workflow helpers ----------
+async function saveCurrentBetaLrmPair(row: HTMLTableRowElement, sequenceQrRaw: string, lrmRaw: string) {
+  if (!betaCurrentUnit) return false;
+
+  const existingSequence = await findBetaRecordBySequenceScan(betaCurrentUnit.expectedSequence);
+  if (existingSequence && existingSequence.id && Number(row.dataset.scanId || 0) !== existingSequence.id) {
+    updateStatus(
+      `Sequence ${betaCurrentUnit.expectedSequence} is already paired. Do not create a duplicate.`,
+      'error',
+    );
+    showBetaRowStatus(row, 'Duplicate sequence', 'error');
+    return false;
+  }
+
+  const existingLrm = await findBetaRecordByLrm(lrmRaw);
+  if (existingLrm && existingLrm.sequenceNumber !== betaCurrentUnit.expectedSequence) {
+    updateStatus(
+      `LRM ${lrmRaw} is already paired to ${existingLrm.sequenceNumber}. Stop and verify the assembly.`,
+      'error',
+    );
+    showBetaRowStatus(row, 'Duplicate LRM', 'error');
+    return false;
+  }
+
+  const nowTs = Date.now();
+  const recId = await db.add({
+    ts: nowTs,
+    runId: getBetaRunId(),
+    mode: 'traceability_beta',
+    workflowPhase: 'lrm_pairing',
+    workflowStatus: 'lrm_paired_pending_leak',
+    buildNumber: betaCurrentUnit.build,
+    lyoCondition: betaCurrentUnit.lyoCondition,
+    sequenceNumber: betaCurrentUnit.expectedSequence,
+    shroudQr: sequenceQrRaw,
+    customerQrCode: getImportedCustomerQr(betaCurrentUnit.expectedSequence),
+    customerQrSequence: extractCustomerQrSequence(getImportedCustomerQr(betaCurrentUnit.expectedSequence)),
+    lrm: lrmRaw,
+    leakTestStatus: 'pending',
+    mixwheelLot: getBetaMixwheelLot(),
+    lrmPairTs: nowTs,
+    pcb: null,
+    top: null,
+    pcbConf: 0,
+    topConf: 0,
+    pcbHist: {},
+    topHist: {},
+    pcbFinal: null,
+    topFinal: null,
+  });
+
+  row.dataset.scanId = String(recId);
+  betaCurrentUnit.recordId = recId;
+
+  const leakCell = row.querySelector('.beta-leak-cell') as HTMLElement | null;
+  updateBetaLeakCell(row, 'pending');
+  void updateBetaRunSummary();
+  notifyRunDataChanged('lrm-pair-saved');
+
+  return true;
+}
+
+async function loadBetaPairForCartridgeOcr(sequenceQrRaw: string) {
+  const existing = await findBetaRecordBySequenceScan(sequenceQrRaw);
+
+  if (!existing || !existing.id) {
+    updateStatus(
+      'Sequence not found. Complete LRM Pairing first, then leak test. Only passing units go to Cartridge OCR.',
+      'error',
+    );
+    return null;
+  }
+
+  if (!(existing.lrm ?? '').trim()) {
+    updateStatus('Saved sequence exists, but no LRM is paired. Stop and verify traceability.', 'error');
+    return null;
+  }
+
+  if (existing.leakTestStatus === 'fail') {
+    updateStatus(`Sequence ${existing.sequenceNumber} is marked Failed / Pulled and cannot go to Cartridge OCR.`, 'error');
+    return null;
+  }
+
+  const orderOk = await resolvePendingBeforeCartridgeOcr(existing);
+  if (!orderOk) {
+    updateStatus('Cartridge OCR canceled so sequence order can be verified.', 'warn');
+    return null;
+  }
+
+  if (isBetaCartridgeCompleteRecord(existing)) {
+    updateStatus(
+      `Sequence ${existing.sequenceNumber} already has completed cartridge data. Use Post-OCR Reject if it failed downstream, or rescan only before completion.`,
+      'error',
+    );
+    return null;
+  }
+
+  const lockAge = existing.lockedAt ? Date.now() - existing.lockedAt : Number.MAX_SAFE_INTEGER;
+  if (
+    existing.workflowStatus === 'ocr_in_progress' &&
+    existing.lockedByStation &&
+    existing.lockedByStation !== STATION_ID &&
+    lockAge < OCR_STATION_LOCK_TIMEOUT_MS
+  ) {
+    updateStatus(
+      `Sequence ${existing.sequenceNumber} is already being processed on another OCR station.`,
+      'error',
+    );
+    return null;
+  }
+
+  await db.update(existing.id, {
+    workflowStatus: 'loaded_for_cartridge_ocr',
+    lockedByStation: STATION_ID,
+    lockedAt: Date.now(),
+  });
+  notifyRunDataChanged('cartridge-row-loaded');
+
+  clearBetaRowActiveStates();
+
+  const existingSequence = existing.sequenceNumber ?? '';
+  const row =
+    getBetaTableRowBySequence(existingSequence) ??
+    createBetaTableRow({
+      build: existing.buildNumber ?? getBetaBuild(),
+      lyoCondition: existing.lyoCondition ?? getBetaLyo(),
+      expectedSequence: existingSequence,
+    });
+
+  populateBetaTableRowFromRecord(row, existing);
+  row.dataset.shroud = existing.shroudQr ?? sequenceQrRaw;
+
+  const leakCell = row.querySelector('.beta-leak-cell') as HTMLElement | null;
+  if (leakCell) leakCell.textContent = 'PASS';
+
+  showBetaRowStatus(row, 'Loaded / Pending OCR');
+
+  betaCurrentUnit = {
+    build: existing.buildNumber ?? getBetaBuild(),
+    lyoCondition: existing.lyoCondition ?? getBetaLyo(),
+    expectedSequence: existing.sequenceNumber ?? '',
+    shroudRaw: sequenceQrRaw,
+    lrm: existing.lrm ?? '',
+    row,
+    recordId: existing.id,
+  };
+
+  setBetaStep('place_part');
+  setBetaRowActive(row, true);
+  armedRow = row;
+  state = 'ARMED';
+  await sendToArduino(TOKEN.READY_FOR_OCR);
+
+  updateStatus(
+    `Loaded ${existing.sequenceNumber} paired to LRM ${existing.lrm}. Place cartridge for OCR.`,
+    'success',
+  );
+
+  return row;
+}
+
 // ---------- Beta scanning ----------
 async function handleBetaShroudScan() {
   if (currentAppMode !== 'traceability_beta') return;
@@ -2266,13 +4709,49 @@ async function handleBetaShroudScan() {
 
   const raw = betaShroudScanInputEl.value.trim();
   if (!raw) return;
+  if (shouldIgnoreDuplicateScan('sequence-input', raw)) {
+    betaShroudScanInputEl.value = '';
+    return;
+  }
+
+  if (betaSpecialAction === 'mark_failed') {
+    betaShroudScanInputEl.value = '';
+    await handleBetaMarkFailedScan(raw);
+    return;
+  }
+
+  if (betaSpecialAction === 'recover_missing') {
+    betaShroudScanInputEl.value = '';
+    await handleBetaRecoverMissingScan(raw);
+    return;
+  }
+
+  if (betaSpecialAction === 'post_ocr_reject') {
+    betaShroudScanInputEl.value = '';
+    await handleBetaPostOcrRejectScan(raw);
+    return;
+  }
+
+  if (getBetaWorkflowPhase() === 'cartridge_ocr') {
+    betaShroudScanInputEl.value = '';
+
+    if (scanInFlight || getPendingPcbConfirmationRow()) {
+      updateStatus('Finish the active cartridge OCR row before scanning another sequence.', 'warn');
+      return;
+    }
+
+    betaCurrentUnit = null;
+    await loadBetaPairForCartridgeOcr(raw);
+    return;
+  }
 
   const row = ensureBetaActiveRow();
   if (!row || !betaCurrentUnit) return;
 
   if (betaCurrentUnit.shroudRaw) {
-    updateStatus('Shroud QR already accepted for this row.', 'error');
+    updateStatus('Duplicate Sequence QR ignored. Scan the exposed LRM label for the current row.', 'warn');
     betaShroudScanInputEl.value = '';
+    focusAndSelect(betaLrmScanInputEl);
     return;
   }
 
@@ -2280,7 +4759,7 @@ async function handleBetaShroudScan() {
   const expectedSequence = betaCurrentUnit.expectedSequence;
 
   if (!parsedSequence) {
-    updateStatus('Could not find a sequence number in the shroud QR scan.', 'error');
+    updateStatus('Could not find a sequence number in the Sequence QR scan.', 'error');
     betaShroudScanInputEl.value = '';
     focusAndSelect(betaShroudScanInputEl);
     return;
@@ -2289,15 +4768,39 @@ async function handleBetaShroudScan() {
   const expectedNum = expectedSequenceNumericValue(expectedSequence);
 
   if (parsedSequence !== expectedNum) {
+    if (isBetaMissingSequenceNumber(parsedSequence)) {
+      const confirmedRecover = window.confirm(
+        `Sequence ${formatBetaSequenceNumber(parsedSequence, expectedSequence)} was marked missing. Restore it and scan its LRM now?`,
+      );
+
+      if (confirmedRecover) {
+        betaShroudScanInputEl.value = '';
+        await beginRecoveredMissingSequence(raw);
+        return;
+      }
+    }
+
     updateStatus(
-      `Wrong shroud scanned. Expected ${expectedSequence}, but received ${parsedSequence}.`,
+      `Wrong Sequence QR scanned. Expected ${expectedSequence}, but received ${parsedSequence}.`,
       'error',
     );
     if (betaExpectedSequenceValueEl) {
       betaExpectedSequenceValueEl.classList.remove('text-indigo-700', 'text-emerald-700');
       betaExpectedSequenceValueEl.classList.add('text-rose-700');
     }
-    showBetaRowStatus(row, 'QR mismatch', 'error');
+    showBetaRowStatus(row, 'Sequence mismatch', 'error');
+    betaShroudScanInputEl.value = '';
+    focusAndSelect(betaShroudScanInputEl);
+    return;
+  }
+
+  const existingSequence = await findBetaRecordBySequenceScan(expectedSequence);
+  if (existingSequence) {
+    updateStatus(
+      `Sequence ${expectedSequence} already exists in the LRM list. Do not duplicate the pair.`,
+      'error',
+    );
+    showBetaRowStatus(row, 'Duplicate sequence', 'error');
     betaShroudScanInputEl.value = '';
     focusAndSelect(betaShroudScanInputEl);
     return;
@@ -2311,25 +4814,30 @@ async function handleBetaShroudScan() {
     betaExpectedSequenceValueEl.classList.add('text-emerald-700');
   }
 
-  showBetaRowStatus(row, 'QR confirmed');
+  showBetaRowStatus(row, 'Sequence confirmed');
   betaShroudScanInputEl.value = '';
   setBetaStep('scan_lrm');
   state = 'WAITING_LRM';
-  updateStatus(`Shroud QR verified for ${expectedSequence}. Scan LRM next.`, 'success');
+  updateStatus(`Sequence QR verified for ${expectedSequence}. Scan exposed LRM next.`, 'success');
 }
 
 async function handleBetaLrmScan() {
   if (currentAppMode !== 'traceability_beta') return;
+  if (getBetaWorkflowPhase() !== 'lrm_pairing') return;
   if (!betaLrmScanInputEl) return;
 
   const raw = betaLrmScanInputEl.value.trim();
   if (!raw) return;
+  if (shouldIgnoreDuplicateScan('lrm-input', raw)) {
+    betaLrmScanInputEl.value = '';
+    return;
+  }
 
   const row = ensureBetaActiveRow();
   if (!row || !betaCurrentUnit) return;
 
   if (!betaCurrentUnit.shroudRaw) {
-    updateStatus('Scan shroud QR first.', 'error');
+    updateStatus('Scan Sequence QR first.', 'error');
     betaLrmScanInputEl.value = '';
     focusAndSelect(betaShroudScanInputEl);
     return;
@@ -2344,7 +4852,7 @@ async function handleBetaLrmScan() {
   if (
     isLikelyDuplicateQrAtLrmStep(raw, betaCurrentUnit.shroudRaw, betaCurrentUnit.expectedSequence)
   ) {
-    updateStatus('LRM scan appears to be the shroud QR. Please scan the LRM label.', 'error');
+    updateStatus('LRM scan appears to be the Sequence QR. Please scan the exposed LRM label.', 'error');
     betaLrmScanInputEl.value = '';
     focusAndSelect(betaLrmScanInputEl);
     return;
@@ -2356,15 +4864,36 @@ async function handleBetaLrmScan() {
   const lrmCell = row.querySelector('.beta-lrm-cell') as HTMLElement | null;
   if (lrmCell) lrmCell.textContent = raw;
 
-  betaLrmScanInputEl.value = '';
-  setBetaStep('place_part');
-  showBetaRowStatus(row, 'Place part for OCR');
-  armedRow = row;
-  state = 'ARMED';
+  const saved = await saveCurrentBetaLrmPair(row, betaCurrentUnit.shroudRaw, raw);
+  if (!saved) {
+    betaLrmScanInputEl.value = '';
+    focusAndSelect(betaLrmScanInputEl);
+    return;
+  }
 
-  await sendToArduino(TOKEN.READY_FOR_OCR);
+  betaLrmScanInputEl.value = '';
+  showBetaRowStatus(row, 'LRM paired / leak test pending', 'ok');
+  setBetaRowActive(row, false);
+
+  const completedSequence = betaCurrentUnit.expectedSequence;
+  const wasRecovered = betaCurrentUnit.recovered === true;
+  if (!wasRecovered) {
+    advanceBetaSequence();
+  } else {
+    const recoveredNum = expectedSequenceNumericValue(completedSequence);
+    if (recoveredNum !== null) removeBetaMissingNumber(recoveredNum);
+    updateBetaRunUI();
+  }
+  resetBetaInputsAfterCompletion();
+  betaCurrentUnit = null;
+  armedRow = null;
+  state = 'WAITING_QR';
+  ensureBetaActiveRow();
+  void updateBetaRunSummary();
+  void updateBetaSequenceCallout();
+
   updateStatus(
-    `LRM accepted for ${betaCurrentUnit.expectedSequence}. Place the part for OCR.`,
+    `Paired ${completedSequence} to LRM ${raw}. Shroud and leak test this assembly. Scan next Sequence QR.`,
     'success',
   );
 }
@@ -2372,6 +4901,20 @@ async function handleBetaLrmScan() {
 async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
   if (scanInFlight || !betaCurrentUnit) return;
   scanInFlight = true;
+  lastOcrFocusedSequence = betaCurrentUnit.expectedSequence;
+
+  const existingRecordForSequence = await findBetaRecordBySequenceScan(betaCurrentUnit.expectedSequence);
+  const existingOcrId = Number(rowToScan.dataset.scanId || betaCurrentUnit.recordId || existingRecordForSequence?.id || 0);
+  if (existingOcrId) {
+    rowToScan.dataset.scanId = String(existingOcrId);
+    betaCurrentUnit.recordId = existingOcrId;
+    await db.update(existingOcrId, {
+      workflowStatus: 'ocr_in_progress',
+      lockedByStation: STATION_ID,
+      lockedAt: Date.now(),
+    });
+    notifyRunDataChanged('ocr-in-progress');
+  }
 
   state = 'SCANNING';
   await sendToArduino(TOKEN.IN_PROGRESS);
@@ -2467,14 +5010,29 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
 
     hasError = pcbDisplay === 'NO_CODE_FOUND' || topDisplay === 'NO_CODE_FOUND' || !topMatches;
 
-    const recId = await db.add({
-      ts: Date.now(),
-      mode: 'traceability_beta',
+    const nowTs = Date.now();
+    const existingId = Number(rowToScan.dataset.scanId || betaCurrentUnit.recordId || existingRecordForSequence?.id || 0);
+    const nextWorkflowStatus: ScanRecord['workflowStatus'] = hasError
+      ? topDisplay === 'NO_CODE_FOUND' || !topMatches
+        ? 'needs_top_correction'
+        : 'needs_rescan'
+      : 'needs_pcb_confirmation';
+    const cartridgePatch = {
+      mode: 'traceability_beta' as const,
+      workflowPhase: 'cartridge_ocr' as const,
+      workflowStatus: nextWorkflowStatus,
+      runId: getBetaRunId(),
       buildNumber: betaCurrentUnit.build,
       lyoCondition: betaCurrentUnit.lyoCondition,
       sequenceNumber: betaCurrentUnit.expectedSequence,
       shroudQr: betaCurrentUnit.shroudRaw ?? undefined,
+      customerQrCode: getImportedCustomerQr(betaCurrentUnit.expectedSequence),
+      customerQrSequence: extractCustomerQrSequence(getImportedCustomerQr(betaCurrentUnit.expectedSequence)),
       lrm: betaCurrentUnit.lrm ?? undefined,
+      leakTestStatus: 'pass' as const,
+      mixwheelLot: getBetaMixwheelLot(),
+      sampleCapLot: getBetaSampleCapLot(),
+      cartridgeScanTs: nowTs,
       pcb: pcbVote.value ?? null,
       top: topVote.value ?? null,
       pcbConf: pcbVote.conf,
@@ -2483,9 +5041,31 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
       topHist: topVote.histogram,
       pcbFinal: pcbVote.value ?? null,
       topFinal: topVote.value ?? null,
-    });
+      lockedByStation: STATION_ID,
+      lockedAt: Date.now(),
+    };
 
-    rowToScan.dataset.scanId = String(recId);
+    if (existingId) {
+      await db.update(existingId, cartridgePatch);
+      rowToScan.dataset.scanId = String(existingId);
+      betaCurrentUnit.recordId = existingId;
+    } else {
+      const matchingRecord = await findBetaRecordBySequenceScan(betaCurrentUnit.expectedSequence);
+      if (matchingRecord?.id) {
+        await db.update(matchingRecord.id, cartridgePatch);
+        rowToScan.dataset.scanId = String(matchingRecord.id);
+        betaCurrentUnit.recordId = matchingRecord.id;
+      } else {
+        const recId = await db.add({ ts: nowTs, ...cartridgePatch });
+        rowToScan.dataset.scanId = String(recId);
+        betaCurrentUnit.recordId = recId;
+      }
+    }
+
+    updateBetaLeakCell(rowToScan, 'pass');
+    scrollTableToSequence(lastOcrFocusedSequence, 'center');
+    notifyRunDataChanged('cartridge-ocr-saved');
+    void updateBetaRunSummary();
 
     const shouldOpenTopCorrectionModal = topDisplay === 'NO_CODE_FOUND' || !topMatches;
 
@@ -2529,6 +5109,15 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
     setOcrPreview(2, 'Scan failed', 'error', 'Top Plate / Sequence Check');
     hidePcbMatchControls();
     hasError = true;
+    const failedId = Number(rowToScan.dataset.scanId || betaCurrentUnit?.recordId || 0);
+    if (failedId) {
+      await db.update(failedId, {
+        workflowStatus: 'needs_rescan',
+        lockedByStation: undefined,
+        lockedAt: undefined,
+      });
+      notifyRunDataChanged('ocr-error');
+    }
     await sendToArduino(TOKEN.OCR_FAIL);
     state = 'COOLDOWN';
     cooldownUntil = performance.now() + POST_SCAN_COOLDOWN_MS;
@@ -2608,6 +5197,10 @@ async function onPresenceStable(present: boolean) {
   const now = performance.now();
   if (state === 'COOLDOWN' && now < cooldownUntil) return;
 
+  if (currentAppMode === 'traceability_beta' && getBetaWorkflowPhase() === 'lrm_pairing') {
+    return;
+  }
+
   if (present) {
     if (state === 'IDLE' || state === 'WAITING_QR' || state === 'WAITING_LRM') {
       updateStatus('Sensor blocked. Remove part to continue.', 'error');
@@ -2679,7 +5272,7 @@ async function onPresenceStable(present: boolean) {
       if (!betaCurrentUnit) {
         updateStatus(
           hasActiveBetaRun()
-            ? 'Ready for next shroud QR scan.'
+            ? 'Ready for next Sequence QR scan.'
             : 'Start traceability run to begin.',
           'info',
         );
@@ -2737,7 +5330,7 @@ function ensureClearTableModal() {
         <div class="px-5 py-4 border-b border-gray-200">
           <h2 id="clearTableModalTitle" class="text-lg font-semibold text-gray-900">Clear table?</h2>
           <p class="mt-1 text-sm text-gray-600">
-            Are you sure you want to clear the table? This will remove the current rows from the screen and clear saved scan records.
+            Are you sure you want to clear the table? This will remove rows for the active traceability run from this browser. Save a run backup first if you may need to restore them.
           </p>
         </div>
 
@@ -2803,11 +5396,40 @@ function confirmClearTable(): Promise<boolean> {
 
 // ---------- Export / Clear ----------
 async function exportFromDB() {
+  if (currentAppMode === 'traceability_beta' && hasActiveBetaRun()) {
+    const records = await getActiveRunBetaRecords();
+    const pending = records.filter(
+      (record) => isNonEmptyString(record.lrm) && record.leakTestStatus !== 'fail' && !isBetaCartridgeCompleteRecord(record),
+    ).length;
+    const needsReview = records.filter((record) =>
+      ['loaded_for_cartridge_ocr', 'ocr_in_progress', 'needs_pcb_confirmation', 'needs_top_correction', 'needs_rescan'].includes(record.workflowStatus ?? ''),
+    ).length;
+    const missing = getBetaMissingNumbers().length;
+
+    if (pending || needsReview) {
+      const proceed = window.confirm(
+        `Export reconciliation warning:\n\nPending cartridge OCR/leak-test rows: ${pending}\nRows needing OCR review/rescan: ${needsReview}\nMissing sequences still reserved: ${missing}\n\nExport anyway?`,
+      );
+      if (!proceed) {
+        updateStatus('Export canceled after reconciliation warning.', 'info');
+        return;
+      }
+    }
+  }
+
   await exportCsv(db);
 }
 
 async function clearTable() {
-  await db.clearAll();
+  if (currentAppMode === 'traceability_beta' && hasActiveBetaRun()) {
+    const records = await getActiveRunBetaRecords();
+    for (const record of records) {
+      if (record.id) await db.delete(record.id);
+    }
+  } else {
+    await db.clearAll();
+  }
+
   tableBody.replaceChildren();
   betaCurrentUnit = null;
   state = 'IDLE';
@@ -2815,29 +5437,47 @@ async function clearTable() {
   if (currentAppMode === 'standard') {
     createStandardTableRow();
   } else if (hasActiveBetaRun()) {
-    ensureBetaActiveRow();
+    await renderBetaTableForActiveRun();
   }
 
   resetOcrPreviews();
-  updateStatus('Table cleared.', 'info');
+  notifyRunDataChanged('table-cleared');
+  updateStatus(currentAppMode === 'traceability_beta' ? 'Active run table records cleared.' : 'Table cleared.', 'info');
 }
 
 // ---------- Bootstrap ----------
 async function start() {
-  await loadHardwareModules();
-  await db.init();
+  // Put the UI into the current Traceability shell before touching hardware.
+  // This prevents Electron from looking like the old static page if camera/media startup fails.
+  currentAppMode = 'traceability_beta';
+  localStorage.setItem(APP_MODE_KEY, currentAppMode);
+  applyAppModeUI();
+  updateBetaRunUI();
+  applyStationRoleUI();
 
-  if (import.meta.env.DEV) {
-    clearRunStateOnly();
-    clearBetaRunStateOnly();
+  try {
+    await loadHardwareModules();
+  } catch (error) {
+    showStartupError(error, 'Hardware module load');
+    return;
   }
+
+  await db.init();
 
   setupAutoReconnect();
 
-  await initWebcams();
-  wireCropControls();
-  livePreviewLoop(crop1, crop2, filter1, filter2);
-  bindFilterPersistence();
+  if (!isLrmOnlyStation()) {
+    try {
+      await initWebcams();
+      wireCropControls();
+      livePreviewLoop(crop1, crop2, filter1, filter2);
+      bindFilterPersistence();
+    } catch (error) {
+      showStartupError(error, 'Camera startup');
+    }
+  } else {
+    applyStationRoleUI();
+  }
 
   const closeMenu = () => {
     if (!menuDropdown) return;
@@ -2872,10 +5512,23 @@ async function start() {
   updateRunUI();
   updateBetaRunUI();
   applyAppModeUI();
-  resetTableForCurrentMode();
+  applyStationRoleUI();
+  await resetTableForCurrentMode();
 
   appModeSelectEl?.addEventListener('change', (e) => {
     setAppMode((e.target as HTMLSelectElement).value as AppMode);
+  });
+
+  singleWindowModeMenuBtn?.addEventListener('click', () => {
+    closeMenu();
+
+    if (isCartridgeStation() && window.opener) {
+      notifyStationModeCommand('single-window');
+      window.setTimeout(() => window.close(), 75);
+      return;
+    }
+
+    void enterSingleWindowStationMode(true);
   });
 
   pcbMatchYesBtn?.addEventListener('click', () => {
@@ -3024,6 +5677,11 @@ async function start() {
 
   // ---------- Traceability run ----------
   const startBetaRunFlow = async () => {
+    setBetaMaterialLots(
+      (document.getElementById('betaMixwheelLotInput') as HTMLInputElement | null)?.value ?? getBetaMixwheelLot(),
+      (document.getElementById('betaSampleCapLotInput') as HTMLInputElement | null)?.value ?? getBetaSampleCapLot(),
+    );
+
     const result = startBetaRun(
       betaBuildInputEl?.value ?? '',
       betaLyoInputEl?.value ?? '',
@@ -3053,6 +5711,7 @@ async function start() {
 
     tableBody.replaceChildren();
     betaCurrentUnit = null;
+    setBetaWorkflowPhase('lrm_pairing');
     ensureBetaActiveRow();
     updateBetaRunUI();
     setBetaStep('scan_shroud');
@@ -3067,6 +5726,7 @@ async function start() {
       : '';
 
     resetOcrPreviews();
+    notifyRunDataChanged('traceability-run-started');
     updateStatus(
       `Traceability started. Build ${result.build}, ${result.lyo}, expected sequence ${result.sequence}.${missingSummary}${startAdjustedSummary}`,
       'success',
@@ -3185,6 +5845,8 @@ async function start() {
     }
   });
 
+  installOcrKeyboardScannerRouter();
+
   // ---------- Hardware / Arduino modal ----------
   applyArduinoUiState();
   onArduinoConnectionChange?.((stateInfo: ArduinoUiState) => {
@@ -3265,6 +5927,7 @@ async function start() {
   };
 
   cameraSelect1El?.addEventListener('change', (e) => {
+    if (isLrmOnlyStation()) return;
     const selectedDeviceId = (e.target as HTMLSelectElement).value;
 
     if (cameraSelect2El) {
@@ -3277,6 +5940,7 @@ async function start() {
   });
 
   cameraSelect2El?.addEventListener('change', (e) => {
+    if (isLrmOnlyStation()) return;
     const selectedDeviceId = (e.target as HTMLSelectElement).value;
 
     if (cameraSelect1El) {
@@ -3292,6 +5956,7 @@ async function start() {
     console.log('[SIM MODE] Keyboard controls enabled: P = present, R = remove');
 
     window.addEventListener('keydown', (e) => {
+      if (isEditableKeyboardTarget(e.target)) return;
       const key = (e.key ?? '').toLowerCase();
       if (!key) return;
 
@@ -3302,13 +5967,13 @@ async function start() {
 
   resetOcrPreviews();
   updateStatus(
-    currentAppMode === 'standard'
-      ? 'Ready for next LRM scan.'
-      : hasActiveBetaRun()
-        ? `Ready for shroud QR scan. Expected sequence: ${getBetaExpectedSequence()}`
-        : 'Traceability selected. Start the traceability run to begin.',
+    hasActiveBetaRun()
+      ? getBetaWorkflowPhase() === 'cartridge_ocr'
+        ? 'Cartridge OCR ready. Scan passing unit Sequence QR.'
+        : `Ready for Sequence QR scan. Next LRM sequence: ${getBetaExpectedSequence()}`
+      : 'Traceability selected. Start the traceability run to begin.',
     'info',
   );
 }
 
-void start();
+void start().catch((error) => showStartupError(error, 'Startup')); 

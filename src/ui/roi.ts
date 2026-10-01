@@ -6,6 +6,15 @@ const roiPreview2 = requireEl<HTMLCanvasElement>('roi-preview-2');
 const webcam1 = requireEl<HTMLVideoElement>('webcam1');
 const webcam2 = requireEl<HTMLVideoElement>('webcam2');
 
+const cropControlBindings = new WeakMap<HTMLInputElement, AbortController>();
+
+function resetCropControlBindings(inputs: HTMLInputElement[]) {
+  for (const input of inputs) {
+    cropControlBindings.get(input)?.abort();
+    cropControlBindings.delete(input);
+  }
+}
+
 function fitWidth(canvas: HTMLCanvasElement) {
   // Use the actual available width of the column.
   const w = Math.max(200, Math.floor(canvas.parentElement?.clientWidth || 260));
@@ -59,6 +68,11 @@ export function setupCropControls(
   xSlider.value = String(Math.round((cropState.x || 0.05) * 100));
   ySlider.value = String(Math.round((cropState.y || 0.05) * 100));
 
+  const inputs = [zoomSlider, xSlider, ySlider];
+  resetCropControlBindings(inputs);
+  const controller = new AbortController();
+  for (const input of inputs) cropControlBindings.set(input, controller);
+
   function update() {
     const zoom = parseFloat(zoomSlider.value) / 100;
     const x = parseFloat(xSlider.value) / 100;
@@ -80,9 +94,9 @@ export function setupCropControls(
     saveDeviceSettings(deviceId, s);
   }
 
-  zoomSlider.addEventListener('input', update);
-  xSlider.addEventListener('input', update);
-  ySlider.addEventListener('input', update);
+  zoomSlider.addEventListener('input', update, { signal: controller.signal });
+  xSlider.addEventListener('input', update, { signal: controller.signal });
+  ySlider.addEventListener('input', update, { signal: controller.signal });
 
   update();
 }

@@ -23,8 +23,9 @@
                 <h1 class="text-base sm:text-lg font-semibold leading-tight text-gray-900 truncate">
                   Smart Cartridge Build Tracker
                 </h1>
+                <div id="app-build-badge" class="text-[10px] font-semibold text-indigo-700 uppercase tracking-wide">GNM-HYBRID-2026-06-24.5</div>
                 <p id="app-subtitle" class="text-xs sm:text-sm text-gray-600 leading-snug truncate">
-                  Traceability: QR confirm → LRM → PCB OCR + top OCR verification.
+                  Traceability: Sequence QR + LRM pairing → leak test → passing unit cartridge OCR. Build GNM-HYBRID-2026-06-24.5.
                 </p>
               </div>
             </div>
@@ -55,7 +56,7 @@
 
                 <div
                   id="menuDropdown"
-                  class="hidden absolute right-0 mt-2 w-56 rounded-lg border border-gray-200 bg-white shadow-lg z-50 overflow-hidden"
+                  class="hidden absolute right-0 mt-2 w-56 rounded-lg border border-gray-200 bg-white shadow-lg z-[200] overflow-hidden"
                 >
                   <button
                     id="arduinoConnectionMenuBtn"
@@ -63,6 +64,13 @@
                     class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                   >
                     Arduino Connection
+                  </button>
+                  <button
+                    id="singleWindowModeMenuBtn"
+                    type="button"
+                    class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    Switch to Single-Window Station
                   </button>
                   <div class="border-t border-gray-100"></div>
                   <button
@@ -328,8 +336,7 @@
               </div>
 
               <p class="mt-2 text-xs text-gray-500">
-                Traceability uses build, lyo, sequence validation, shroud QR, LRM, PCB OCR, and top
-                plate OCR verification. The mode selector is kept for future workflow options.
+                Traceability uses Sequence QR + LRM pairing before shrouding, leak-test pass/fail handling, and passing-unit cartridge OCR. The mode selector is kept for future workflow options.
               </p>
             </div>
 
@@ -476,7 +483,7 @@
             <!-- TRACEABILITY PANEL -->
             <div
               id="traceability-run-panel"
-              class="hidden rounded-lg border border-indigo-200 bg-indigo-50/40 p-3"
+              class="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3"
             >
               <div id="traceability-empty">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -518,8 +525,7 @@
                       class="table-cell-input mt-2"
                     />
                     <p class="mt-2 text-xs text-gray-500">
-                      This expected sequence will be checked against the shroud QR first, then
-                      compared again against the Top Plate OCR value.
+                      This expected sequence will be checked when the Sequence QR is scanned, then later compared against the Top Plate OCR value.
                     </p>
                   </div>
 
@@ -571,8 +577,11 @@
                     </div>
                     <div id="betaActiveLyoValue" class="text-sm font-semibold text-gray-900"></div>
 
-                    <div class="mt-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                      Expected Sequence
+                    <div
+                      id="betaExpectedSequenceLabel"
+                      class="mt-2 text-xs font-semibold text-gray-500 uppercase tracking-wide"
+                    >
+                      Next LRM Sequence
                     </div>
                     <div
                       id="betaExpectedSequenceValue"
@@ -623,7 +632,7 @@
                       Current Step
                     </div>
                     <div id="betaCurrentStepValue" class="text-sm font-semibold text-gray-900">
-                      Scan shroud QR
+                      Scan Sequence QR
                     </div>
                   </div>
 
@@ -642,12 +651,12 @@
                       for="betaShroudScanInput"
                       class="block text-sm font-semibold text-gray-700"
                     >
-                      Step 1: Shroud QR Scan
+                      Step 1: Sequence QR Scan
                     </label>
                     <input
                       id="betaShroudScanInput"
                       type="text"
-                      placeholder="Scan shroud QR..."
+                      placeholder="Scan Sequence QR..."
                       class="table-cell-input mt-2"
                       autocomplete="off"
                     />
@@ -669,12 +678,10 @@
 
                   <div>
                     <div class="block text-sm font-semibold text-gray-700">
-                      Step 3: Place part for OCR
+                      Step 3: Save pair / OCR stage
                     </div>
                     <p class="mt-2 text-xs text-gray-500">
-                      PCB and Top Plate values will be filled into the table automatically. If the
-                      Top Plate OCR result does not match the expected sequence, a correction modal
-                      will open automatically. LRM can be corrected by double-clicking the LRM cell.
+                      In LRM Pairing, save the Sequence + exposed LRM pair before shrouding/leak test. In Cartridge OCR, passing units load the saved LRM pair and then OCR PCB/Top Plate.
                     </p>
                   </div>
                 </div>
@@ -691,7 +698,7 @@
               id="status-message"
               class="font-medium min-h-[44px] flex items-center justify-start text-gray-700"
             >
-              Please scan a barcode...
+              Traceability selected. Start the traceability run to begin.
             </div>
             <div id="loader-container" class="hidden">
               <div
@@ -707,17 +714,15 @@
             <table class="w-max min-w-full text-sm text-left table-auto">
               <thead class="bg-gray-50 border-b sticky top-0 z-10">
                 <tr id="data-table-head-row">
-                  <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">
-                    CONDITION
-                  </th>
-                  <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">LRM #</th>
-                  <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">PCB #</th>
-                  <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">
-                    Top Plate #
-                  </th>
-                  <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">
-                    Actions
-                  </th>
+                  <th class="min-w-[56px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Build</th>
+                  <th class="min-w-[52px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Lyo</th>
+                  <th class="min-w-[120px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Sequence #</th>
+                  <th class="min-w-[120px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">LRM #</th>
+                  <th class="min-w-[88px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Leak Test</th>
+                  <th class="min-w-[72px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">PCB #</th>
+                  <th class="min-w-[104px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Top Plate #</th>
+                  <th class="min-w-[140px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Status</th>
+                  <th class="min-w-[96px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
 

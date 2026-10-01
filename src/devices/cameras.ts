@@ -191,68 +191,107 @@ function setupExposureSlider(
   };
 }
 
+export function stopAllCameraStreams() {
+  if (restartTimer) {
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
+
+  [currentStream1, currentStream2].forEach((s) => {
+    s?.getTracks().forEach((t) => {
+      try {
+        t.stop();
+      } catch {}
+    });
+  });
+
+  currentStream1 = null;
+  currentStream2 = null;
+  (webcam1 as any).srcObject = null;
+  (webcam2 as any).srcObject = null;
+}
+
+function stopStream(stream: MediaStream | null) {
+  stream?.getTracks().forEach((track) => {
+    try {
+      track.stop();
+    } catch {}
+  });
+}
+
 export async function startStreams() {
   if (restartTimer) clearTimeout(restartTimer);
-  restartTimer = setTimeout(async () => {
-    if (!cameraSelect1.value || !cameraSelect2.value) return;
-    if (cameraSelect1.value === cameraSelect2.value) {
-      updateStatus('Choose two different cameras.', 'error');
-      return;
-    }
 
-    // stop previous
-    [currentStream1, currentStream2].forEach((s) => {
-      s?.getTracks().forEach((t) => {
-        try {
-          t.stop();
-        } catch {}
-      });
-    });
-    (webcam1 as any).srcObject = null;
-    (webcam2 as any).srcObject = null;
+  return new Promise<void>((resolve) => {
+    restartTimer = setTimeout(async () => {
+      restartTimer = null;
 
-    await new Promise((r) => setTimeout(r, 80));
-
-    try {
-      const common: MediaTrackConstraints = {
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 30 },
-      };
-      const stream1 = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: cameraSelect1.value }, ...common },
-        audio: false,
-      });
-      const stream2 = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: cameraSelect2.value }, ...common },
-        audio: false,
-      });
-
-      (webcam1 as any).srcObject = stream1;
-      (webcam2 as any).srcObject = stream2;
-      currentStream1 = stream1;
-      currentStream2 = stream2;
-
-      setupFocusSlider(stream1, focusControl1, focusSlider1, cameraSelect1.value);
-      setupExposureSlider(stream1, exposureControl1, exposureSlider1, cameraSelect1.value);
-      setupFocusSlider(stream2, focusControl2, focusSlider2, cameraSelect2.value);
-      setupExposureSlider(stream2, exposureControl2, exposureSlider2, cameraSelect2.value);
-
-      updateStatus('Cameras ready.', 'success');
-    } catch (err: any) {
-      console.error('startStreams error:', err);
-      if (err?.name === 'OverconstrainedError' || err?.name === 'NotReadableError') {
-        updateStatus(
-          'That camera is already in use or cannot be opened. Pick a different device.',
-          'error',
-        );
-      } else if (err?.name === 'NotAllowedError') {
-        updateStatus('Camera permission denied. Allow access to use cameras.', 'error');
-      } else {
-        updateStatus(`Failed to start cameras: ${err?.name || 'Unknown'}`, 'error');
+      if (!cameraSelect1.value || !cameraSelect2.value) {
+        resolve();
+        return;
       }
-    }
-  }, 120) as unknown as number;
+
+      if (cameraSelect1.value === cameraSelect2.value) {
+        updateStatus('Choose two different cameras.', 'error');
+        resolve();
+        return;
+      }
+
+      // stop previous
+      stopAllCameraStreams();
+
+      await new Promise((r) => setTimeout(r, 80));
+
+      let stream1: MediaStream | null = null;
+      let stream2: MediaStream | null = null;
+
+      try {
+        const common: MediaTrackConstraints = {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30 },
+        };
+
+        stream1 = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: cameraSelect1.value }, ...common },
+          audio: false,
+        });
+        stream2 = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: cameraSelect2.value }, ...common },
+          audio: false,
+        });
+
+        (webcam1 as any).srcObject = stream1;
+        (webcam2 as any).srcObject = stream2;
+        currentStream1 = stream1;
+        currentStream2 = stream2;
+
+        setupFocusSlider(stream1, focusControl1, focusSlider1, cameraSelect1.value);
+        setupExposureSlider(stream1, exposureControl1, exposureSlider1, cameraSelect1.value);
+        setupFocusSlider(stream2, focusControl2, focusSlider2, cameraSelect2.value);
+        setupExposureSlider(stream2, exposureControl2, exposureSlider2, cameraSelect2.value);
+
+        updateStatus('Cameras ready.', 'success');
+      } catch (err: any) {
+        stopStream(stream1);
+        stopStream(stream2);
+
+        console.error('startStreams error:', err);
+        if (err?.name === 'OverconstrainedError' || err?.name === 'NotReadableError') {
+          updateStatus(
+            'That camera is already in use or cannot be opened. Pick a different device.',
+            'error',
+          );
+        } else if (err?.name === 'NotAllowedError') {
+          updateStatus('Camera permission denied. Allow access to use cameras.', 'error');
+        } else {
+          updateStatus(`Failed to start cameras: ${err?.name || 'Unknown'}`, 'error');
+        }
+      } finally {
+        resolve();
+      }
+    }, 120) as unknown as number;
+  });
 }
 
 export async function initWebcams() {
@@ -263,7 +302,8 @@ export async function initWebcams() {
         'Not a secure context. Use http://localhost or https:// for stable device IDs/labels.',
       );
     }
-    await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    const permissionProbeStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    stopStream(permissionProbeStream);
     const devices = await navigator.mediaDevices.enumerateDevices();
     videoDevices = devices.filter((d) => d.kind === 'videoinput');
     if (videoDevices.length < 2) {
@@ -321,7 +361,7 @@ export async function initWebcams() {
 // Debounced devicechange
 
 let deviceChangeTimer: any = null;
-navigator.mediaDevices.addEventListener?.('devicechange', () => {
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
   console.log('devicechange detected (debounced)');
   clearTimeout(deviceChangeTimer);
   deviceChangeTimer = setTimeout(() => {

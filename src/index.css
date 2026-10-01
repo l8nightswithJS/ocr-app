@@ -275,3 +275,436 @@ tbody tr:last-child {
   color: #374151;
   cursor: pointer;
 }
+
+/* ============================= */
+/* DEDICATED LRM PAIRING STATION */
+/* ============================= */
+
+body.lrm-station {
+  background: #f3f6fb;
+}
+
+body.lrm-station main {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 1rem !important;
+  max-width: none;
+  align-items: start;
+}
+
+body.lrm-station main > aside {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: calc(100vh - 9.5rem);
+  overflow: visible;
+  padding: 1rem;
+}
+
+body.lrm-station #status-container {
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 1rem;
+  background: transparent;
+  border: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+body.lrm-station #stationRoleBanner {
+  border-radius: 1rem;
+  border-width: 1px;
+  padding: 1rem 1.25rem;
+  font-size: 1rem;
+  box-shadow: 0 10px 24px rgba(79, 70, 229, 0.08);
+}
+
+body.lrm-station #traceability-run-panel {
+  border-radius: 1rem;
+  border-color: #bfdbfe;
+  background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%);
+  padding: 1rem;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+body.lrm-station #traceability-active > .flex,
+body.lrm-station #traceability-empty {
+  border-radius: 0.875rem;
+  border: 1px solid #dbeafe;
+  background: #ffffff;
+  padding: 1rem;
+}
+
+body.lrm-station #traceability-active > .mt-4.grid {
+  border-radius: 1rem;
+  border: 2px solid #c7d2fe;
+  background: #eef2ff;
+  padding: 1.25rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+
+body.lrm-station #traceability-active > .mt-4.grid > div:last-child {
+  grid-column: 1 / -1;
+}
+
+body.lrm-station #betaShroudScanInput,
+body.lrm-station #betaLrmScanInput {
+  min-height: 3.25rem;
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  background: #ffffff;
+}
+
+body.lrm-station #betaCurrentStepValue,
+body.lrm-station #betaExpectedSequenceValue {
+  font-size: 0.95rem;
+}
+
+body.lrm-station .lrm-run-tools {
+  border-radius: 1rem;
+  padding: 1rem;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+}
+
+body.lrm-station .run-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  border-radius: 9999px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 0.45rem 0.75rem;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+body.lrm-station .run-tools-grid {
+  grid-template-columns: minmax(280px, 1.15fr) minmax(240px, 0.85fr) minmax(280px, 1fr) !important;
+}
+
+body.lrm-station .run-tool-card {
+  min-width: 0;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+
+body.lrm-station #mode-indicator {
+  margin-bottom: 0;
+  border: 1px solid #dbeafe;
+  background: #ffffff;
+}
+
+body.lrm-station h3.font-semibold.text-lg.mb-2 {
+  margin-bottom: -0.5rem;
+}
+
+body.lrm-station #status-message {
+  min-height: 3.25rem;
+  border: 1px solid #d1fae5;
+  color: #065f46;
+  background: #ecfdf5;
+  padding: 0.85rem 1rem;
+}
+
+body.lrm-station #table-scroll-container {
+  margin-top: 1rem;
+  min-height: 44vh;
+  border-radius: 1rem;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+body.lrm-station aside table {
+  width: 100%;
+  min-width: 1180px;
+}
+
+body.lrm-station aside th {
+  padding: 0.75rem 0.75rem;
+  background: #f8fafc;
+  font-size: 0.76rem;
+}
+
+body.lrm-station aside td {
+  padding: 0.75rem 0.75rem;
+  font-size: 0.84rem;
+}
+
+body.lrm-station tbody tr:last-child {
+  background-color: #eff6ff;
+}
+
+body.lrm-station tbody tr:has(.text-emerald-700) {
+  background-color: #f0fdf4;
+}
+
+body.lrm-station tbody tr:has(.text-rose-700) {
+  background-color: #fff1f2;
+}
+
+body.lrm-station tbody tr:has(.text-amber-700) {
+  background-color: #fffbeb;
+}
+
+body.lrm-station .actions-cell .actions-wrap {
+  gap: 0.5rem;
+}
+
+body.lrm-station .actions-cell .rescan-btn,
+body.lrm-station .actions-cell button {
+  min-height: 2rem;
+}
+
+@media (max-width: 1280px) {
+  body.lrm-station .run-tools-grid,
+  body.lrm-station #traceability-active > .mt-4.grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+body.cartridge-station #betaEnhancementPanel {
+  display: none;
+}
+
+/* ============================= */
+/* LRM OPERATOR STICKY SCAN DOCK */
+/* ============================= */
+
+body.lrm-station #lrmOperatorDock {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 20;
+  margin: 0 0 0.75rem 0;
+  padding: 0.7rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(10px);
+}
+
+body.lrm-station .lrm-dock-topline {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(220px, 0.8fr) minmax(320px, auto);
+  gap: 0.55rem;
+  align-items: center;
+}
+
+body.lrm-station .lrm-dock-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-bottom: 0.25rem;
+  border-radius: 9999px;
+  background: #eef2ff;
+  color: #4338ca;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+body.lrm-station .lrm-dock-title {
+  min-width: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+body.lrm-station #lrmDockExpectedSequence {
+  color: #4f46e5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 1.02rem;
+  letter-spacing: 0.01em;
+}
+
+body.lrm-station .lrm-dock-subtitle {
+  color: #475569;
+  font-weight: 700;
+}
+
+body.lrm-station #lrmDockCurrentStep {
+  color: #111827;
+}
+
+body.lrm-station .lrm-dock-summary {
+  justify-self: start;
+  border-radius: 9999px;
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  color: #1e3a8a;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+body.lrm-station .lrm-dock-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+body.lrm-station .lrm-dock-action {
+  min-height: 2.05rem;
+  border-radius: 0.45rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.05;
+  color: white;
+}
+
+body.lrm-station .lrm-dock-action-danger { background: #dc2626; }
+body.lrm-station .lrm-dock-action-danger:hover { background: #b91c1c; }
+body.lrm-station .lrm-dock-action-warn { background: #d97706; }
+body.lrm-station .lrm-dock-action-warn:hover { background: #b45309; }
+body.lrm-station .lrm-dock-action-success { background: #059669; }
+body.lrm-station .lrm-dock-action-success:hover { background: #047857; }
+body.lrm-station .lrm-dock-action-muted { background: #475569; }
+body.lrm-station .lrm-dock-action-muted:hover { background: #334155; }
+
+body.lrm-station .lrm-dock-scan-grid {
+  margin-top: 0.55rem;
+}
+
+body.lrm-station .lrm-sticky-scan-grid {
+  border-radius: 0.875rem !important;
+  border: 2px solid #c7d2fe !important;
+  background: #eef2ff !important;
+  padding: 0.65rem !important;
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 0.75rem !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.65);
+}
+
+body.lrm-station .lrm-sticky-scan-grid > div:last-child {
+  display: none;
+}
+
+body.lrm-station .lrm-sticky-scan-grid label {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #1f2937;
+}
+
+body.lrm-station .lrm-sticky-scan-grid #betaShroudScanInput,
+body.lrm-station .lrm-sticky-scan-grid #betaLrmScanInput {
+  min-height: 3.15rem;
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+body.lrm-station .lrm-dock-status {
+  margin-top: 0.5rem;
+  min-height: 2.05rem;
+  display: flex;
+  align-items: center;
+  border-radius: 0.75rem;
+  border: 1px solid #bbf7d0;
+  background: #ecfdf5;
+  color: #065f46;
+  padding: 0.65rem 0.85rem;
+  font-weight: 800;
+}
+
+body.lrm-station .lrm-setup-details,
+body.lrm-station .run-tools-details {
+  border-radius: 0.875rem;
+  border: 1px solid #dbeafe;
+  background: #ffffff;
+  padding: 0.85rem;
+}
+
+body.lrm-station .lrm-setup-details summary,
+body.lrm-station .run-tools-details summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+body.lrm-station .lrm-setup-details summary::-webkit-details-marker,
+body.lrm-station .run-tools-details summary::-webkit-details-marker {
+  display: none;
+}
+
+body.lrm-station .lrm-setup-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-weight: 800;
+  color: #1e3a8a;
+}
+
+body.lrm-station .lrm-setup-summary-help {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+body.lrm-station .lrm-setup-details-body {
+  margin-top: 0.85rem;
+}
+
+body.lrm-station #traceability-run-panel {
+  background: #f8fbff;
+}
+
+body.lrm-station #betaEnhancementPanel {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body.lrm-station .run-tools-details > summary {
+  padding: 0.85rem;
+  border-radius: 0.875rem;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+body.lrm-station .run-tools-details[open] > summary {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+}
+
+body.lrm-station .run-tools-toggle {
+  border-radius: 9999px;
+  border: 1px solid #c7d2fe;
+  background: #ffffff;
+  padding: 0.35rem 0.65rem;
+}
+
+@media (max-width: 1450px) {
+  body.lrm-station .lrm-dock-topline {
+    grid-template-columns: 1fr;
+  }
+
+  body.lrm-station .lrm-dock-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  body.lrm-station .lrm-sticky-scan-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+
+/* Keep the top-right menu above the LRM dock when dual-window mode is active. */
+#menuDropdown {
+  z-index: 200;
+}
+
+@media (max-width: 1180px) {
+  body.lrm-station .lrm-dock-topline {
+    grid-template-columns: 1fr;
+  }
+
+  body.lrm-station .lrm-dock-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
