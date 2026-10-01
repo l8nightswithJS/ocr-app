@@ -88,7 +88,6 @@ export const UI = {
         <td class="px-6 py-3">
           <input type="text" class="table-cell-input lrm-input" value="${lrm}" />
         </td>
-        <td class="px-6 py-3 font-mono pcb-cell"></td>
         <td class="px-6 py-3 font-mono top-plate-cell"></td>
         <td class="px-6 py-3">
           <button class="rescan-btn bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded border">
@@ -102,8 +101,8 @@ export const UI = {
     return row;
   },
 
-  setRowOCR(row: HTMLElement, which: 'pcb' | 'top', value: string) {
-    const cell = row.querySelector<HTMLElement>(which === 'pcb' ? '.pcb-cell' : '.top-plate-cell');
+  setRowOCR(row: HTMLElement, value: string) {
+    const cell = row.querySelector<HTMLElement>('.top-plate-cell');
     if (cell) cell.textContent = value;
   },
 
