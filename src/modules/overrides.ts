@@ -69,7 +69,7 @@ function applyPlacement(placement: OverridePromptOptions['placement']) {
 }
 
 export function promptOverride(
-  fieldLabel: 'PCB' | 'TOP',
+  fieldLabel: 'TOP',
   currentValue: string | null,
   options: OverridePromptOptions = {},
 ): Promise<OverrideResult | null> {
