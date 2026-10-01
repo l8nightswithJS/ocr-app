@@ -258,11 +258,9 @@ export interface DevicesMeta {
   [deviceId: string]: { label?: string } & Json;
 }
 
-// Support both legacy cam1/cam2 and camAId/camBId
+// Keep the existing Top Plate camera key so current stations retain their selection.
 export interface PersistedIds {
-  cam1?: string;
   cam2?: string;
-  camAId?: string;
   camBId?: string;
 }
 
@@ -335,17 +333,15 @@ export function saveDeviceSettings(deviceId: string, settings: Partial<DeviceSet
   write(LS.perDevice, all);
 }
 
-/** Persist preferred device IDs (supports cam1/cam2 and camAId/camBId) */
+/** Persist the preferred Top Plate camera ID. */
 export function savePersistedIds(ids: PersistedIds): void {
   const cur = read<PersistedIds>(LS.persistedIds, {});
   write(LS.persistedIds, { ...cur, ...ids });
 }
 export function loadPersistedIds(): PersistedIds {
   const got = read<PersistedIds>(LS.persistedIds, {});
-  // Normalize: if only camAId/camBId were stored, mirror them to cam1/cam2
   return {
     ...got,
-    cam1: got.cam1 ?? got.camAId,
     cam2: got.cam2 ?? got.camBId,
   };
 }
