@@ -5063,6 +5063,8 @@ async function start() {
   if (!isLrmOnlyStation()) {
     try {
       await initWebcams();
+      const topCameraId = (document.getElementById('camera-select-2') as HTMLSelectElement | null)?.value;
+      if (topCameraId) applyDeviceSettingsToUI(topCameraId);
       wireCropControls();
       livePreviewLoop(crop2, filter2);
       bindFilterPersistence();
