@@ -2007,6 +2007,7 @@ function openCartridgeOcrStation() {
 async function enterSingleWindowStationMode(broadcast = true) {
   if (broadcast) notifyStationModeCommand('single-window');
 
+  const cameraWasInactive = isLrmOnlyStation();
   stationRole = 'full';
   setStationRoleUrlParam('full');
   betaSpecialAction = null;
@@ -2019,7 +2020,14 @@ async function enterSingleWindowStationMode(broadcast = true) {
 
   try {
     await initWebcams();
+    const topCameraId = (document.getElementById('camera-select-2') as HTMLSelectElement | null)?.value;
+    if (topCameraId) applyDeviceSettingsToUI(topCameraId);
     wireCropControls();
+
+    if (cameraWasInactive) {
+      livePreviewLoop(crop2, filter2);
+      bindFilterPersistence();
+    }
   } catch (error) {
     showStartupError(error, 'Single-window camera startup');
   }
