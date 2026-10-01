@@ -266,35 +266,21 @@ const arduinoForgetPortModalBtn = document.getElementById(
   'arduinoForgetPortModalBtn',
 ) as HTMLButtonElement | null;
 
-const brightness1 = document.getElementById('brightness-1') as HTMLInputElement;
-const contrast1 = document.getElementById('contrast-1') as HTMLInputElement;
 const brightness2 = document.getElementById('brightness-2') as HTMLInputElement;
 const contrast2 = document.getElementById('contrast-2') as HTMLInputElement;
 
-const zoom1 = document.getElementById('zoom-1') as HTMLInputElement;
-const x1 = document.getElementById('x-1') as HTMLInputElement;
-const y1 = document.getElementById('y-1') as HTMLInputElement;
 const zoom2 = document.getElementById('zoom-2') as HTMLInputElement;
 const x2 = document.getElementById('x-2') as HTMLInputElement;
 const y2 = document.getElementById('y-2') as HTMLInputElement;
 
-const webcam1 = document.getElementById('webcam1') as HTMLVideoElement;
 const webcam2 = document.getElementById('webcam2') as HTMLVideoElement;
 
 // ---------- OCR preview result UI ----------
 type OcrPreviewTone = 'idle' | 'busy' | 'ok' | 'warn' | 'error';
 
-const ocrResultCard1 = document.getElementById('ocr-result-card-1') as HTMLDivElement | null;
 const ocrResultCard2 = document.getElementById('ocr-result-card-2') as HTMLDivElement | null;
-const ocrResultLabel1 = document.getElementById('ocr-result-label-1') as HTMLDivElement | null;
 const ocrResultLabel2 = document.getElementById('ocr-result-label-2') as HTMLDivElement | null;
-const ocrResultValue1 = document.getElementById('ocr-result-value-1') as HTMLDivElement | null;
 const ocrResultValue2 = document.getElementById('ocr-result-value-2') as HTMLDivElement | null;
-
-const pcbMatchControlsEl = document.getElementById('pcb-match-controls') as HTMLDivElement | null;
-const pcbMatchPromptEl = document.getElementById('pcb-match-prompt') as HTMLDivElement | null;
-const pcbMatchYesBtn = document.getElementById('pcb-match-yes-btn') as HTMLButtonElement | null;
-const pcbMatchNoBtn = document.getElementById('pcb-match-no-btn') as HTMLButtonElement | null;
 
 function applyOcrPreviewTone(
   card: HTMLDivElement | null,
@@ -354,92 +340,19 @@ function applyOcrPreviewTone(
 }
 
 function setOcrPreview(
-  camera: 1 | 2,
   value: string,
   tone: OcrPreviewTone = 'idle',
   labelOverride?: string,
 ) {
-  const card = camera === 1 ? ocrResultCard1 : ocrResultCard2;
-  const label = camera === 1 ? ocrResultLabel1 : ocrResultLabel2;
-  const valueEl = camera === 1 ? ocrResultValue1 : ocrResultValue2;
-
-  if (label && labelOverride) {
-    label.textContent = labelOverride;
+  if (ocrResultLabel2 && labelOverride) {
+    ocrResultLabel2.textContent = labelOverride;
   }
 
-  if (valueEl) {
-    valueEl.textContent = value;
+  if (ocrResultValue2) {
+    ocrResultValue2.textContent = value;
   }
 
-  applyOcrPreviewTone(card, valueEl, tone);
-}
-
-function setPcbMatchButtonState(selected: 'yes' | 'no' | null) {
-  const configs = [
-    { btn: pcbMatchYesBtn, active: selected === 'yes' },
-    { btn: pcbMatchNoBtn, active: selected === 'no' },
-  ];
-
-  for (const { btn, active } of configs) {
-    if (!btn) continue;
-
-    btn.classList.remove(
-      'border-gray-300',
-      'bg-white',
-      'text-gray-700',
-      'hover:bg-gray-50',
-      'border-indigo-600',
-      'bg-indigo-600',
-      'text-white',
-      'hover:bg-indigo-700',
-    );
-
-    if (active) {
-      btn.classList.add('border-indigo-600', 'bg-indigo-600', 'text-white', 'hover:bg-indigo-700');
-    } else {
-      btn.classList.add('border-gray-300', 'bg-white', 'text-gray-700', 'hover:bg-gray-50');
-    }
-  }
-}
-
-function hidePcbMatchControls() {
-  if (!pcbMatchControlsEl) return;
-  pcbMatchControlsEl.classList.add('hidden');
-  setPcbMatchButtonState(null);
-
-  if (pcbMatchYesBtn) pcbMatchYesBtn.disabled = true;
-  if (pcbMatchNoBtn) pcbMatchNoBtn.disabled = true;
-}
-
-function showPcbMatchControls(pcbValue: string) {
-  if (!pcbMatchControlsEl) return;
-
-  if (pcbMatchPromptEl) {
-    pcbMatchPromptEl.textContent = `PCB result ${pcbValue}. Do these match?`;
-  }
-
-  pcbMatchControlsEl.classList.remove('hidden');
-  if (pcbMatchYesBtn) pcbMatchYesBtn.disabled = false;
-  if (pcbMatchNoBtn) pcbMatchNoBtn.disabled = false;
-  setPcbMatchButtonState(null);
-}
-
-function getPendingPcbConfirmationRow() {
-  const rows = Array.from(tableBody.querySelectorAll<HTMLTableRowElement>('tr'));
-
-  for (const row of rows) {
-    if (row.dataset.pcbConfirmRequired === 'true' && row.dataset.pcbConfirmed !== 'true') {
-      return row;
-    }
-  }
-
-  return null;
-}
-
-function getPendingStandardPcbConfirmationRow() {
-  const row = getPendingPcbConfirmationRow();
-  if (!row) return null;
-  return row.dataset.mode === 'standard' ? row : null;
+  applyOcrPreviewTone(ocrResultCard2, ocrResultValue2, tone);
 }
 
 function hasOpenStandardEntryRow() {
@@ -464,7 +377,6 @@ function betaRowTopIsVerified(row: HTMLTableRowElement) {
 async function maybeCreateNextStandardRowIfReady() {
   if (currentAppMode !== 'standard') return false;
   if (stablePresence) return false;
-  if (getPendingStandardPcbConfirmationRow()) return false;
   if (hasOpenStandardEntryRow()) return false;
 
   state = 'IDLE';
@@ -474,73 +386,20 @@ async function maybeCreateNextStandardRowIfReady() {
   return true;
 }
 
-async function maybeAdvanceBetaAfterPcbConfirmation(row: HTMLTableRowElement) {
-  if (currentAppMode !== 'traceability_beta') return false;
-  if (!betaCurrentUnit || betaCurrentUnit.row !== row) return false;
-  if (row.dataset.pcbConfirmed !== 'true') return false;
-  if (!betaRowTopIsVerified(row)) return false;
-
-  const completedSequence = betaCurrentUnit.expectedSequence;
-  lastOcrFocusedSequence = completedSequence;
-
-  const idStr = row.dataset.scanId;
-  if (idStr) {
-    await db.update(Number(idStr), {
-      workflowStatus: 'complete',
-      leakTestStatus: 'pass',
-      lockedByStation: undefined,
-      lockedAt: undefined,
-    });
-    notifyRunDataChanged('cartridge-complete');
-  }
-
-  showBetaRowStatus(row, 'Complete', 'ok');
-  setBetaRowActive(row, false);
-
-  if (getBetaWorkflowPhase() === 'lrm_pairing') {
-    advanceBetaSequence();
-    ensureBetaActiveRow();
-  }
-
-  resetBetaInputsAfterCompletion();
-  betaCurrentUnit = null;
-  armedRow = null;
-  state = 'WAITING_QR';
-  setBetaStep('scan_shroud');
-
-  if (getBetaWorkflowPhase() === 'cartridge_ocr') {
-    await renderBetaTableForActiveRun();
-  }
-
-  updateStatus(
-    getBetaWorkflowPhase() === 'cartridge_ocr'
-      ? `Cartridge OCR complete for ${completedSequence}. Scan next passing unit Sequence QR.`
-      : `Traceability row complete for ${completedSequence}. Scan next Sequence QR.`,
-    'success',
-  );
-  return true;
-}
-
 function resetOcrPreviews() {
-  setOcrPreview(1, '—', 'idle', 'PCB');
   setOcrPreview(
-    2,
     '—',
     'idle',
     currentAppMode === 'traceability_beta' ? 'Top Plate / Sequence Check' : 'Top Plate',
   );
-  hidePcbMatchControls();
 }
 
 function setOcrPreviewsScanning() {
-  setOcrPreview(1, 'Scanning...', 'busy', 'PCB');
   setOcrPreview(
-    2,
     'Scanning...',
     'busy',
     currentAppMode === 'traceability_beta' ? 'Top Plate / Sequence Check' : 'Top Plate',
   );
-  hidePcbMatchControls();
 }
 
 // ---------- Arduino connection modal / status pill ----------
@@ -646,9 +505,7 @@ function closeArduinoModal() {
 }
 
 // ---------- Persisted filters / crops ----------
-let crop1: Crop = { x: 0.05, y: 0.05, width: 0.9, height: 0.9 };
 let crop2: Crop = { x: 0.05, y: 0.05, width: 0.9, height: 0.9 };
-let filter1: Filter = { brightness: 100, contrast: 100 };
 let filter2: Filter = { brightness: 100, contrast: 100 };
 
 // ---------- UI mode persistence ----------
@@ -1005,7 +862,7 @@ function setStationRoleUrlParam(role: StationRole) {
 }
 
 function hasUnsafeLocalBetaWorkInProgress() {
-  if (scanInFlight || getPendingPcbConfirmationRow()) return true;
+  if (scanInFlight) return true;
   if (!betaCurrentUnit) return false;
 
   // In LRM Pairing Station, an empty next row is safe to rebuild when the OCR
@@ -1354,7 +1211,7 @@ async function routeKeyboardOcrScannerScan(raw: string) {
     return;
   }
 
-  if (scanInFlight || getPendingPcbConfirmationRow()) {
+  if (scanInFlight) {
     updateStatus('Keyboard OCR scanner ignored. Finish the active cartridge OCR/PCB confirmation first.', 'warn');
     return;
   }
@@ -1427,7 +1284,7 @@ async function routeSerialScannerScan(route: ScannerRoute, raw: string) {
   }
 
   if (route === 'cartridge') {
-    if (scanInFlight || getPendingPcbConfirmationRow()) {
+    if (scanInFlight) {
       updateStatus('OCR scanner ignored. Finish the active cartridge OCR/PCB confirmation first.', 'warn');
       return;
     }
@@ -1493,16 +1350,20 @@ function refreshScannerSerialUi() {
   }
 }
 
-function isWorkflowStatusComplete(record: { workflowStatus?: ScanRecord['workflowStatus']; pcb?: string | null; pcbFinal?: string | null; top?: string | null; topFinal?: string | null; sequenceNumber?: string; condition?: string }) {
+function isWorkflowStatusComplete(record: {
+  workflowStatus?: ScanRecord['workflowStatus'];
+  top?: string | null;
+  topFinal?: string | null;
+  sequenceNumber?: string;
+  condition?: string;
+}) {
   if (record.workflowStatus === 'complete' || record.workflowStatus === 'post_ocr_reject') return true;
   if (record.workflowStatus) return false;
 
-  const pcb = record.pcbFinal ?? record.pcb ?? '';
   const top = record.topFinal ?? record.top ?? '';
   const seq = record.sequenceNumber ?? record.condition ?? '';
+
   return (
-    isNonEmptyString(pcb) &&
-    pcb !== 'NO_CODE_FOUND' &&
     isNonEmptyString(top) &&
     top !== 'NO_CODE_FOUND' &&
     topMatchesExpectedSequence(top, seq)
@@ -1513,7 +1374,7 @@ function isNonEmptyString(value: string | null | undefined) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function isBetaCartridgeCompleteRecord(record: ScanRecord | { workflowStatus?: ScanRecord['workflowStatus']; pcbFinal?: string | null; pcb?: string | null; topFinal?: string | null; top?: string | null; sequenceNumber?: string; condition?: string }) {
+function isBetaCartridgeCompleteRecord(record: ScanRecord | { workflowStatus?: ScanRecord['workflowStatus']; topFinal?: string | null; top?: string | null; sequenceNumber?: string; condition?: string }) {
   return isWorkflowStatusComplete(record);
 }
 
@@ -1646,15 +1507,13 @@ function getOcrMaxAttempts() {
 
 async function settleBeforeOcr() {
   if (!SIM_MODE) {
-    await waitForFreshFrame(webcam1, CAPTURE_SETTLE_FRAMES);
     await waitForFreshFrame(webcam2, CAPTURE_SETTLE_FRAMES);
-    await settleAfterPresence([webcam1, webcam2], 1, 0, waitForFreshFrame);
+    await settleAfterPresence([webcam2], 1, 0, waitForFreshFrame);
 
     if (CAPTURE_EXTRA_DELAY_MS > 0) {
       await new Promise((r) => setTimeout(r, CAPTURE_EXTRA_DELAY_MS));
     }
   } else {
-    await waitForFreshFrame(webcam1, 1);
     await waitForFreshFrame(webcam2, 1);
     await new Promise((r) => setTimeout(r, 30));
   }
@@ -3385,7 +3244,6 @@ function renderTableHeaders() {
     <th class="min-w-[120px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Sequence #</th>
     <th class="min-w-[120px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">LRM #</th>
     <th class="min-w-[88px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Leak Test</th>
-    <th class="min-w-[72px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">PCB #</th>
     <th class="min-w-[104px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Top Plate #</th>
     <th class="min-w-[140px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Status</th>
     <th class="min-w-[96px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Actions</th>
@@ -3394,7 +3252,6 @@ function renderTableHeaders() {
     tableHeadRowEl.innerHTML = `
       <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">CONDITION</th>
       <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">LRM #</th>
-      <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">PCB #</th>
       <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">Top Plate #</th>
       <th class="px-2 py-2 text-center font-semibold text-gray-600 uppercase">Actions</th>
     `;
@@ -3449,7 +3306,10 @@ function setBetaRowActive(row: HTMLTableRowElement, active: boolean) {
   row.classList.toggle('ring-amber-300', active);
 }
 
-function completeBetaUnitAfterVerification(row: HTMLTableRowElement, topFinalValue: string) {
+async function completeBetaUnitAfterVerification(
+  row: HTMLTableRowElement,
+  topFinalValue: string,
+) {
   const sequence = row.dataset.sequence ?? '';
   const matches = topMatchesExpectedSequence(topFinalValue, sequence);
   if (!matches) return false;
@@ -3460,36 +3320,17 @@ function completeBetaUnitAfterVerification(row: HTMLTableRowElement, topFinalVal
     topCell.classList.add('text-emerald-700', 'font-semibold');
   }
 
-  setOcrPreview(2, `${topFinalValue} ✓`, 'ok', 'Top Plate / Sequence Check');
-
-  const pcbCell = row.querySelector('.beta-pcb-cell') as HTMLElement | null;
-  const pcbValue = (pcbCell?.textContent ?? '').trim();
-  if (!pcbValue || pcbValue === 'NO_CODE_FOUND') {
-    const idForPcbFail = row.dataset.scanId;
-    if (idForPcbFail) {
-      void db.update(Number(idForPcbFail), { workflowStatus: 'needs_rescan' }).then(() => notifyRunDataChanged('pcb-missing-needs-rescan'));
-    }
-    showBetaRowStatus(row, 'PCB OCR failed - rescan', 'error');
-    setBetaRowActive(row, true);
-    updateStatus('Top Plate verified, but PCB OCR is missing. Rescan OCR before completing this row.', 'error');
-    return true;
-  }
-
-  if (row.dataset.pcbConfirmRequired === 'true' && row.dataset.pcbConfirmed !== 'true') {
-    showBetaRowStatus(row, 'Confirm PCB');
-    setBetaRowActive(row, true);
-    updateStatus('Top Plate verified. Confirm PCB match Yes or No to continue.', 'warn');
-    return true;
-  }
+  setOcrPreview(`${topFinalValue} ✓`, 'ok', 'Top Plate / Sequence Check');
 
   const idStr = row.dataset.scanId;
   if (idStr) {
-    void db.update(Number(idStr), {
+    await db.update(Number(idStr), {
       workflowStatus: 'complete',
       leakTestStatus: 'pass',
       lockedByStation: undefined,
       lockedAt: undefined,
-    }).then(() => notifyRunDataChanged('cartridge-complete-after-top-correction'));
+    });
+    notifyRunDataChanged('cartridge-complete-after-top-verification');
   }
 
   showBetaRowStatus(row, 'Complete', 'ok');
@@ -3497,6 +3338,7 @@ function completeBetaUnitAfterVerification(row: HTMLTableRowElement, topFinalVal
 
   if (betaCurrentUnit?.row === row) {
     const completedSequence = betaCurrentUnit.expectedSequence;
+    lastOcrFocusedSequence = completedSequence;
 
     if (getBetaWorkflowPhase() === 'lrm_pairing') {
       advanceBetaSequence();
@@ -3508,10 +3350,15 @@ function completeBetaUnitAfterVerification(row: HTMLTableRowElement, topFinalVal
     armedRow = null;
     state = 'WAITING_QR';
     setBetaStep('scan_shroud');
+
+    if (getBetaWorkflowPhase() === 'cartridge_ocr') {
+      await renderBetaTableForActiveRun();
+    }
+
     updateStatus(
       getBetaWorkflowPhase() === 'cartridge_ocr'
-        ? `Top Plate corrected and verified for ${completedSequence}. Scan next passing unit Sequence QR.`
-        : `Top Plate corrected and verified for ${completedSequence}. Scan next Sequence QR.`,
+        ? `Top Plate verified for ${completedSequence}. Scan next passing unit Sequence QR.`
+        : `Top Plate verified for ${completedSequence}. Scan next Sequence QR.`,
       'success',
     );
   }
@@ -3519,7 +3366,7 @@ function completeBetaUnitAfterVerification(row: HTMLTableRowElement, topFinalVal
   return true;
 }
 
-async function promptAndApplyBetaTopOverride(
+async function promptAndApplyBetaTopOverrideasync function promptAndApplyBetaTopOverride(
   row: HTMLTableRowElement,
   currentValue: string,
   autoOpened = false,
@@ -3562,10 +3409,10 @@ async function promptAndApplyBetaTopOverride(
 
   if (matches) {
     topCell.classList.add('text-emerald-700', 'font-semibold');
-    setOcrPreview(2, `${res.value} ✓`, 'ok', 'Top Plate / Sequence Check');
+    setOcrPreview(`${res.value} ✓`, 'ok', 'Top Plate / Sequence Check');
   } else {
     topCell.classList.add('text-rose-700', 'font-semibold');
-    setOcrPreview(2, `${res.value} ✕`, 'error', 'Top Plate / Sequence Check');
+    setOcrPreview(`${res.value} ✕`, 'error', 'Top Plate / Sequence Check');
   }
 
   const idStr = row.dataset.scanId;
@@ -3577,7 +3424,7 @@ async function promptAndApplyBetaTopOverride(
   }
 
   if (matches) {
-    completeBetaUnitAfterVerification(row, res.value);
+    await completeBetaUnitAfterVerification(row, res.value);
     return true;
   }
 
@@ -3692,9 +3539,6 @@ function createBetaTableRow(unit: Pick<BetaUnit, 'build' | 'lyoCondition' | 'exp
   row.dataset.lyo = unit.lyoCondition;
   row.dataset.active = 'true';
   row.dataset.mode = 'traceability_beta';
-  row.dataset.pcbConfirmRequired = 'false';
-  row.dataset.pcbConfirmed = 'true';
-  row.dataset.pcbConfirmAnswer = '';
 
   row.innerHTML = `
   <td class="px-2 py-2 text-center align-top text-xs font-mono beta-build-cell">${unit.build}</td>
@@ -3702,7 +3546,6 @@ function createBetaTableRow(unit: Pick<BetaUnit, 'build' | 'lyoCondition' | 'exp
   <td class="px-2 py-2 text-center align-top text-xs font-mono beta-sequence-cell">${unit.expectedSequence}</td>
   <td class="px-2 py-2 text-center align-top text-xs font-mono beta-lrm-cell break-all"></td>
   <td class="px-2 py-2 text-center align-top text-xs beta-leak-cell break-all">Pending</td>
-  <td class="px-2 py-2 text-center align-top text-xs font-mono beta-pcb-cell break-all"></td>
   <td class="px-2 py-2 text-center align-top text-xs font-mono beta-top-cell break-all"></td>
   <td class="px-2 py-2 align-top text-center text-xs beta-status-cell text-gray-700 break-words">Waiting Sequence QR</td>
   <td class="px-1 py-2 align-top whitespace-nowrap actions-cell">
@@ -3724,31 +3567,10 @@ function createBetaTableRow(unit: Pick<BetaUnit, 'build' | 'lyoCondition' | 'exp
   setBetaRowActive(row, true);
 
   const lrmCell = row.querySelector('.beta-lrm-cell') as HTMLElement;
-  const pcbCell = row.querySelector('.beta-pcb-cell') as HTMLElement;
   const topCell = row.querySelector('.beta-top-cell') as HTMLElement;
 
   lrmCell.addEventListener('dblclick', () => {
     startBetaLrmInlineEdit(row);
-  });
-
-  pcbCell.addEventListener('dblclick', async () => {
-    const current = (pcbCell.textContent || '').trim();
-    const res = await promptOverride('PCB', current === 'NO_CODE_FOUND' ? '' : current);
-    if (!res) return;
-
-    pcbCell.textContent = res.value;
-    pcbCell.classList.remove('text-yellow-600', 'font-semibold');
-    row.querySelector('.beta-override-badge')?.classList.remove('hidden');
-    setOcrPreview(1, res.value || 'NO_CODE_FOUND', 'ok', 'PCB');
-
-    const idStr = row.dataset.scanId;
-    if (idStr) {
-      await db.update(Number(idStr), { pcbFinal: res.value, pcbOverrideReason: res.reason });
-    }
-
-    if (row.dataset.pcbConfirmRequired === 'true' && row.dataset.pcbConfirmed !== 'true') {
-      showPcbMatchControls(res.value || '—');
-    }
   });
 
   topCell.addEventListener('dblclick', async () => {
@@ -3899,10 +3721,6 @@ function populateBetaTableRowFromRecord(row: HTMLTableRowElement, record: ScanRe
   row.dataset.shroud = record.shroudQr ?? sequence;
   row.dataset.lrm = lrm;
   row.dataset.mode = 'traceability_beta';
-  row.dataset.pcbConfirmRequired = 'false';
-  row.dataset.pcbConfirmed = 'true';
-  row.dataset.pcbConfirmAnswer = '';
-
   if (record.id) row.dataset.scanId = String(record.id);
   else delete row.dataset.scanId;
 
@@ -4099,7 +3917,6 @@ function createStandardTableRow() {
         autocomplete="off"
       />
     </td>
-    <td class="px-2 py-2 font-mono pcb-cell text-center whitespace-nowrap"></td>
     <td class="px-2 py-2 font-mono top-plate-cell text-center whitespace-nowrap"></td>
     <td class="px-2 py-2 whitespace-nowrap actions-cell">
       <div class="actions-wrap">
@@ -4143,9 +3960,8 @@ function createStandardTableRow() {
   attachLrmOverride(input, row);
   input.focus();
 
-  const pcbCell = row.querySelector('.pcb-cell') as HTMLElement;
   const tpCell = row.querySelector('.top-plate-cell') as HTMLElement;
-  [pcbCell, tpCell].forEach((cell) => attachOverride(cell, row));
+  attachOverride(tpCell, row);
 
   const rescanBtn = row.querySelector('.rescan-btn') as HTMLButtonElement;
   rescanBtn.addEventListener('click', async () => {
@@ -4176,35 +3992,25 @@ function attachOverride(cell: HTMLElement, row: HTMLTableRowElement) {
     const raw = (cell.textContent || '').trim();
     const current = raw === 'NO_CODE_FOUND' ? '' : raw;
 
-    const isPcb = cell.classList.contains('pcb-cell');
-    const label = isPcb ? ('PCB' as const) : ('TOP' as const);
-
-    const res = await promptOverride(label, current);
+    const res = await promptOverride('TOP', current);
     if (!res) return;
 
     cell.textContent = res.value;
     cell.classList.remove('text-yellow-600', 'font-semibold');
     showOverrideBadge(row);
-
-    if (isPcb) {
-      setOcrPreview(1, res.value || 'NO_CODE_FOUND', 'ok', 'PCB');
-    } else {
-      setOcrPreview(2, res.value || 'NO_CODE_FOUND', 'ok', 'Top Plate');
-    }
+    setOcrPreview(res.value || 'NO_CODE_FOUND', 'ok', 'Top Plate');
 
     const idStr = row.dataset.scanId;
     if (idStr) {
-      const id = Number(idStr);
-      if (isPcb) {
-        await db.update(id, { pcbFinal: res.value, pcbOverrideReason: res.reason });
-      } else {
-        await db.update(id, { topFinal: res.value, topOverrideReason: res.reason });
-      }
+      await db.update(Number(idStr), {
+        topFinal: res.value,
+        topOverrideReason: res.reason,
+      });
     }
   });
 }
 
-function attachLrmOverride(input: HTMLInputElement, row: HTMLTableRowElement) {
+function attachLrmOverridefunction attachLrmOverride(input: HTMLInputElement, row: HTMLTableRowElement) {
   input.addEventListener('dblclick', () => {
     if (input.dataset.accepted !== 'true') return;
 
@@ -4282,83 +4088,6 @@ async function commitLrmOverride(input: HTMLInputElement, row: HTMLTableRowEleme
   }
 }
 
-async function handlePcbMatchDecision(choice: 'yes' | 'no') {
-  const row = getPendingPcbConfirmationRow();
-  if (!row) {
-    hidePcbMatchControls();
-    return;
-  }
-
-  const isBeta = row.dataset.mode === 'traceability_beta';
-  const pcbCell =
-    (row.querySelector('.pcb-cell') as HTMLElement | null) ??
-    (row.querySelector('.beta-pcb-cell') as HTMLElement | null);
-
-  const currentValue = (pcbCell?.textContent ?? '').trim();
-
-  if (choice === 'no') {
-    setPcbMatchButtonState('no');
-
-    const res = await promptOverride('PCB', currentValue === 'NO_CODE_FOUND' ? '' : currentValue);
-    if (!res) {
-      setPcbMatchButtonState(null);
-      showPcbMatchControls(currentValue || '—');
-      updateStatus('PCB confirmation is still required before continuing.', 'warn');
-      return;
-    }
-
-    if (pcbCell) {
-      pcbCell.textContent = res.value;
-      pcbCell.classList.remove('text-yellow-600', 'font-semibold');
-    }
-
-    showOverrideBadge(row);
-    setOcrPreview(1, res.value || 'NO_CODE_FOUND', res.value ? 'ok' : 'error', 'PCB');
-
-    const idStr = row.dataset.scanId;
-    if (idStr) {
-      await db.update(Number(idStr), { pcbFinal: res.value, pcbOverrideReason: res.reason });
-    }
-  } else {
-    setPcbMatchButtonState('yes');
-  }
-
-  row.dataset.pcbConfirmRequired = 'true';
-  row.dataset.pcbConfirmed = 'true';
-  row.dataset.pcbConfirmAnswer = choice;
-
-  hidePcbMatchControls();
-
-  if (isBeta) {
-    const advanced = await maybeAdvanceBetaAfterPcbConfirmation(row);
-    if (!advanced) {
-      updateStatus(
-        choice === 'yes'
-          ? 'PCB match confirmed. Finish Top verification to continue.'
-          : 'PCB corrected and confirmed. Finish Top verification to continue.',
-        'success',
-      );
-    }
-    return;
-  }
-
-  const createdNextRow = await maybeCreateNextStandardRowIfReady();
-
-  if (choice === 'yes') {
-    updateStatus(
-      createdNextRow ? 'PCB match confirmed. Ready for next LRM scan.' : 'PCB match confirmed.',
-      'success',
-    );
-  } else {
-    updateStatus(
-      createdNextRow
-        ? 'PCB corrected and confirmed. Ready for next LRM scan.'
-        : 'PCB corrected and confirmed.',
-      'success',
-    );
-  }
-}
-
 // ---------- Standard scanning ----------
 async function handleLrmScan(e: Event) {
   if (currentAppMode !== 'standard') return;
@@ -4414,81 +4143,41 @@ async function runStandardScan(rowToScan: HTMLTableRowElement) {
 
   await settleBeforeOcr();
 
-  updateStatus('Scanning...', 'loading');
+  updateStatus('Scanning Top Plate...', 'loading');
   setOcrPreviewsScanning();
 
   let hasError = false;
-  try {
-    const ocrAttempts = getOcrMaxAttempts();
 
-    const [topVote, pcbVote] = await Promise.all([
-      adaptiveBurstRead(
-        webcam2,
-        crop2,
-        filter2,
-        'Top Plate',
-        readNumberFromCamera,
-        ocrAttempts,
-        OCR_MIN_GAP_FRAMES,
-        waitForFreshFrame,
-      ),
-      adaptiveBurstRead(
-        webcam1,
-        crop1,
-        filter1,
-        'PCB',
-        readNumberFromCamera,
-        ocrAttempts,
-        OCR_MIN_GAP_FRAMES,
-        waitForFreshFrame,
-      ),
-    ]);
+  try {
+    const topVote = await adaptiveBurstRead(
+      webcam2,
+      crop2,
+      filter2,
+      'Top Plate',
+      readNumberFromCamera,
+      getOcrMaxAttempts(),
+      OCR_MIN_GAP_FRAMES,
+      waitForFreshFrame,
+    );
 
     const topDisplay = topVote.value ?? 'NO_CODE_FOUND';
-    const pcbDisplay = pcbVote.value ?? 'NO_CODE_FOUND';
-
     const tpCell = rowToScan.querySelector('.top-plate-cell') as HTMLElement;
-    const pcbCell = rowToScan.querySelector('.pcb-cell') as HTMLElement;
 
     tpCell.textContent = topDisplay;
-    pcbCell.textContent = pcbDisplay;
 
     const isTopAmber = topVote.conf < 2 / 3;
-    const isPcbAmber = pcbVote.conf < 2 / 3;
-
     tpCell.classList.toggle('text-yellow-600', isTopAmber);
     tpCell.classList.toggle('font-semibold', isTopAmber);
-    pcbCell.classList.toggle('text-yellow-600', isPcbAmber);
-    pcbCell.classList.toggle('font-semibold', isPcbAmber);
 
     setOcrPreview(
-      1,
-      pcbDisplay,
-      pcbDisplay === 'NO_CODE_FOUND' ? 'error' : isPcbAmber ? 'warn' : 'ok',
-      'PCB',
-    );
-    setOcrPreview(
-      2,
       topDisplay,
       topDisplay === 'NO_CODE_FOUND' ? 'error' : isTopAmber ? 'warn' : 'ok',
       'Top Plate',
     );
 
-    rowToScan.dataset.pcbConfirmRequired = pcbDisplay === 'NO_CODE_FOUND' ? 'false' : 'true';
-    rowToScan.dataset.pcbConfirmed = pcbDisplay === 'NO_CODE_FOUND' ? 'true' : 'false';
-    rowToScan.dataset.pcbConfirmAnswer = '';
-
-    if (pcbDisplay !== 'NO_CODE_FOUND') {
-      showPcbMatchControls(pcbDisplay);
-    } else {
-      hidePcbMatchControls();
-    }
-
-    hasError = topDisplay === 'NO_CODE_FOUND' || pcbDisplay === 'NO_CODE_FOUND';
+    hasError = topDisplay === 'NO_CODE_FOUND';
     updateStatus(
-      pcbDisplay === 'NO_CODE_FOUND'
-        ? 'Scan complete. PCB not found. Remove part.'
-        : 'Scan complete. Confirm PCB match, then remove part.',
+      hasError ? 'Scan complete. Top Plate number not found. Remove part.' : 'Top Plate scan complete. Remove part.',
       hasError ? 'error' : 'success',
     );
 
@@ -4507,25 +4196,17 @@ async function runStandardScan(rowToScan: HTMLTableRowElement) {
       condition: assignedCondition ?? undefined,
       lyoCondition: getRunLyo() || undefined,
       lrm,
-      pcb: pcbVote.value,
       top: topVote.value,
-      pcbConf: pcbVote.conf,
       topConf: topVote.conf,
-      pcbHist: pcbVote.histogram,
       topHist: topVote.histogram,
-      pcbFinal: pcbVote.value,
       topFinal: topVote.value,
     });
 
     rowToScan.dataset.scanId = String(recId);
   } catch (err) {
     console.error('OCR process failed:', err);
-    updateStatus('A critical error occurred. Remove part.', 'error');
-    setOcrPreview(1, 'Scan failed', 'error', 'PCB');
-    setOcrPreview(2, 'Scan failed', 'error', 'Top Plate');
-    hidePcbMatchControls();
-    rowToScan.dataset.pcbConfirmRequired = 'false';
-    rowToScan.dataset.pcbConfirmed = 'true';
+    updateStatus('A critical OCR error occurred. Remove part.', 'error');
+    setOcrPreview('Scan failed', 'error', 'Top Plate');
     hasError = true;
   }
 
@@ -4735,7 +4416,7 @@ async function handleBetaShroudScan() {
   if (getBetaWorkflowPhase() === 'cartridge_ocr') {
     betaShroudScanInputEl.value = '';
 
-    if (scanInFlight || getPendingPcbConfirmationRow()) {
+    if (scanInFlight) {
       updateStatus('Finish the active cartridge OCR row before scanning another sequence.', 'warn');
       return;
     }
@@ -4903,11 +4584,20 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
   scanInFlight = true;
   lastOcrFocusedSequence = betaCurrentUnit.expectedSequence;
 
-  const existingRecordForSequence = await findBetaRecordBySequenceScan(betaCurrentUnit.expectedSequence);
-  const existingOcrId = Number(rowToScan.dataset.scanId || betaCurrentUnit.recordId || existingRecordForSequence?.id || 0);
+  const existingRecordForSequence = await findBetaRecordBySequenceScan(
+    betaCurrentUnit.expectedSequence,
+  );
+  const existingOcrId = Number(
+    rowToScan.dataset.scanId ||
+      betaCurrentUnit.recordId ||
+      existingRecordForSequence?.id ||
+      0,
+  );
+
   if (existingOcrId) {
     rowToScan.dataset.scanId = String(existingOcrId);
     betaCurrentUnit.recordId = existingOcrId;
+
     await db.update(existingOcrId, {
       workflowStatus: 'ocr_in_progress',
       lockedByStation: STATION_ID,
@@ -4918,105 +4608,80 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
 
   state = 'SCANNING';
   await sendToArduino(TOKEN.IN_PROGRESS);
-  updateStatus('Part detected. Stabilizing image...', 'loading');
-  showBetaRowStatus(rowToScan, 'Reading OCR...');
+  updateStatus('Part detected. Stabilizing Top Plate image...', 'loading');
+  showBetaRowStatus(rowToScan, 'Reading Top Plate...');
 
   await settleBeforeOcr();
-
   setOcrPreviewsScanning();
 
   let hasError = false;
 
   try {
-    const ocrAttempts = getOcrMaxAttempts();
+    const topVote = await adaptiveBurstRead(
+      webcam2,
+      crop2,
+      filter2,
+      'Top Plate',
+      readNumberFromCamera,
+      getOcrMaxAttempts(),
+      OCR_MIN_GAP_FRAMES,
+      waitForFreshFrame,
+    );
 
-    const [topVote, pcbVote] = await Promise.all([
-      adaptiveBurstRead(
-        webcam2,
-        crop2,
-        filter2,
-        'Top Plate',
-        readNumberFromCamera,
-        ocrAttempts,
-        OCR_MIN_GAP_FRAMES,
-        waitForFreshFrame,
-      ),
-      adaptiveBurstRead(
-        webcam1,
-        crop1,
-        filter1,
-        'PCB',
-        readNumberFromCamera,
-        ocrAttempts,
-        OCR_MIN_GAP_FRAMES,
-        waitForFreshFrame,
-      ),
-    ]);
-
-    const pcbDisplay = pcbVote.value ?? 'NO_CODE_FOUND';
     const topDisplay = topVote.value ?? 'NO_CODE_FOUND';
-
-    const pcbCell = rowToScan.querySelector('.beta-pcb-cell') as HTMLElement;
     const topCell = rowToScan.querySelector('.beta-top-cell') as HTMLElement;
 
-    pcbCell.textContent = pcbDisplay;
     topCell.textContent = topDisplay;
 
-    const isPcbAmber = pcbVote.conf < 2 / 3;
     const isTopAmber = topVote.conf < 2 / 3;
-
-    pcbCell.classList.toggle('text-yellow-600', isPcbAmber);
-    pcbCell.classList.toggle('font-semibold', isPcbAmber);
     topCell.classList.toggle('text-yellow-600', isTopAmber);
     topCell.classList.toggle('font-semibold', isTopAmber);
 
-    const topMatches = topMatchesExpectedSequence(topVote.value, betaCurrentUnit.expectedSequence);
+    const topMatches = topMatchesExpectedSequence(
+      topVote.value,
+      betaCurrentUnit.expectedSequence,
+    );
 
     if (topDisplay !== 'NO_CODE_FOUND') {
       topCell.classList.remove('text-rose-700', 'text-emerald-700');
-      if (topMatches) topCell.classList.add('text-emerald-700', 'font-semibold');
-      else topCell.classList.add('text-rose-700', 'font-semibold');
+
+      if (topMatches) {
+        topCell.classList.add('text-emerald-700', 'font-semibold');
+      } else {
+        topCell.classList.add('text-rose-700', 'font-semibold');
+      }
     }
 
-    setOcrPreview(
-      1,
-      pcbDisplay,
-      pcbDisplay === 'NO_CODE_FOUND' ? 'error' : isPcbAmber ? 'warn' : 'ok',
-      'PCB',
-    );
-
     if (topDisplay === 'NO_CODE_FOUND') {
-      setOcrPreview(2, 'NO_CODE_FOUND', 'error', 'Top Plate / Sequence Check');
+      setOcrPreview('NO_CODE_FOUND', 'error', 'Top Plate / Sequence Check');
     } else if (!topMatches) {
       setOcrPreview(
-        2,
         `${topDisplay} ✕`,
         isTopAmber ? 'warn' : 'error',
         'Top Plate / Sequence Check',
       );
     } else {
-      setOcrPreview(2, `${topDisplay} ✓`, isTopAmber ? 'warn' : 'ok', 'Top Plate / Sequence Check');
+      setOcrPreview(
+        `${topDisplay} ✓`,
+        isTopAmber ? 'warn' : 'ok',
+        'Top Plate / Sequence Check',
+      );
     }
 
-    rowToScan.dataset.pcbConfirmRequired = pcbDisplay === 'NO_CODE_FOUND' ? 'false' : 'true';
-    rowToScan.dataset.pcbConfirmed = pcbDisplay === 'NO_CODE_FOUND' ? 'true' : 'false';
-    rowToScan.dataset.pcbConfirmAnswer = '';
-
-    if (pcbDisplay !== 'NO_CODE_FOUND') {
-      showPcbMatchControls(pcbDisplay);
-    } else {
-      hidePcbMatchControls();
-    }
-
-    hasError = pcbDisplay === 'NO_CODE_FOUND' || topDisplay === 'NO_CODE_FOUND' || !topMatches;
+    hasError = topDisplay === 'NO_CODE_FOUND' || !topMatches;
 
     const nowTs = Date.now();
-    const existingId = Number(rowToScan.dataset.scanId || betaCurrentUnit.recordId || existingRecordForSequence?.id || 0);
+    const existingId = Number(
+      rowToScan.dataset.scanId ||
+        betaCurrentUnit.recordId ||
+        existingRecordForSequence?.id ||
+        0,
+    );
+
     const nextWorkflowStatus: ScanRecord['workflowStatus'] = hasError
-      ? topDisplay === 'NO_CODE_FOUND' || !topMatches
-        ? 'needs_top_correction'
-        : 'needs_rescan'
-      : 'needs_pcb_confirmation';
+      ? 'needs_top_correction'
+      : 'complete';
+
     const cartridgePatch = {
       mode: 'traceability_beta' as const,
       workflowPhase: 'cartridge_ocr' as const,
@@ -5027,22 +4692,20 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
       sequenceNumber: betaCurrentUnit.expectedSequence,
       shroudQr: betaCurrentUnit.shroudRaw ?? undefined,
       customerQrCode: getImportedCustomerQr(betaCurrentUnit.expectedSequence),
-      customerQrSequence: extractCustomerQrSequence(getImportedCustomerQr(betaCurrentUnit.expectedSequence)),
+      customerQrSequence: extractCustomerQrSequence(
+        getImportedCustomerQr(betaCurrentUnit.expectedSequence),
+      ),
       lrm: betaCurrentUnit.lrm ?? undefined,
       leakTestStatus: 'pass' as const,
       mixwheelLot: getBetaMixwheelLot(),
       sampleCapLot: getBetaSampleCapLot(),
       cartridgeScanTs: nowTs,
-      pcb: pcbVote.value ?? null,
       top: topVote.value ?? null,
-      pcbConf: pcbVote.conf,
       topConf: topVote.conf,
-      pcbHist: pcbVote.histogram,
       topHist: topVote.histogram,
-      pcbFinal: pcbVote.value ?? null,
       topFinal: topVote.value ?? null,
-      lockedByStation: STATION_ID,
-      lockedAt: Date.now(),
+      lockedByStation: hasError ? STATION_ID : undefined,
+      lockedAt: hasError ? Date.now() : undefined,
     };
 
     if (existingId) {
@@ -5050,7 +4713,10 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
       rowToScan.dataset.scanId = String(existingId);
       betaCurrentUnit.recordId = existingId;
     } else {
-      const matchingRecord = await findBetaRecordBySequenceScan(betaCurrentUnit.expectedSequence);
+      const matchingRecord = await findBetaRecordBySequenceScan(
+        betaCurrentUnit.expectedSequence,
+      );
+
       if (matchingRecord?.id) {
         await db.update(matchingRecord.id, cartridgePatch);
         rowToScan.dataset.scanId = String(matchingRecord.id);
@@ -5067,31 +4733,29 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
     notifyRunDataChanged('cartridge-ocr-saved');
     void updateBetaRunSummary();
 
-    const shouldOpenTopCorrectionModal = topDisplay === 'NO_CODE_FOUND' || !topMatches;
+    const shouldOpenTopCorrectionModal =
+      topDisplay === 'NO_CODE_FOUND' || !topMatches;
 
-    if (pcbDisplay === 'NO_CODE_FOUND') {
-      showBetaRowStatus(rowToScan, 'PCB OCR failed', 'error');
+    if (shouldOpenTopCorrectionModal) {
+      showBetaRowStatus(
+        rowToScan,
+        topDisplay === 'NO_CODE_FOUND' ? 'Top OCR failed' : 'Top mismatch',
+        'error',
+      );
       setBetaRowActive(rowToScan, true);
-      updateStatus('PCB OCR failed. Remove part and rescan.', 'error');
-    } else if (topDisplay === 'NO_CODE_FOUND') {
-      showBetaRowStatus(rowToScan, 'Top OCR failed', 'error');
-      setBetaRowActive(rowToScan, true);
-      updateStatus('Top OCR failed. Opening Top Plate correction modal.', 'error');
-    } else if (!topMatches) {
-      showBetaRowStatus(rowToScan, 'Top mismatch', 'error');
-      setBetaRowActive(rowToScan, true);
+
       updateStatus(
-        `Top OCR mismatch. Opening Top Plate correction modal. Expected numeric value from ${betaCurrentUnit.expectedSequence}, got ${topDisplay}.`,
+        topDisplay === 'NO_CODE_FOUND'
+          ? 'Top OCR failed. Opening Top Plate correction modal.'
+          : `Top OCR mismatch. Expected numeric value from ${betaCurrentUnit.expectedSequence}, got ${topDisplay}.`,
         'error',
       );
     } else {
-      showBetaRowStatus(rowToScan, 'Confirm PCB');
-      setBetaRowActive(rowToScan, true);
-      updateStatus('Top verified. Confirm PCB match Yes or No to continue.', 'warn');
+      await completeBetaUnitAfterVerification(rowToScan, topDisplay);
     }
 
     await sendToArduino(hasError ? TOKEN.OCR_FAIL : TOKEN.OCR_OK);
-    state = 'COOLDOWN';
+    state = hasError ? 'COOLDOWN' : 'WAITING_QR';
     cooldownUntil = performance.now() + POST_SCAN_COOLDOWN_MS;
     armedRow = null;
 
@@ -5102,14 +4766,16 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
     }
   } catch (err) {
     console.error('Beta OCR failed:', err);
-    updateStatus('A critical OCR error occurred.', 'error');
+    updateStatus('A critical Top Plate OCR error occurred.', 'error');
     showBetaRowStatus(rowToScan, 'OCR error', 'error');
     setBetaRowActive(rowToScan, true);
-    setOcrPreview(1, 'Scan failed', 'error', 'PCB');
-    setOcrPreview(2, 'Scan failed', 'error', 'Top Plate / Sequence Check');
-    hidePcbMatchControls();
+    setOcrPreview('Scan failed', 'error', 'Top Plate / Sequence Check');
     hasError = true;
-    const failedId = Number(rowToScan.dataset.scanId || betaCurrentUnit?.recordId || 0);
+
+    const failedId = Number(
+      rowToScan.dataset.scanId || betaCurrentUnit?.recordId || 0,
+    );
+
     if (failedId) {
       await db.update(failedId, {
         workflowStatus: 'needs_rescan',
@@ -5118,6 +4784,7 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
       });
       notifyRunDataChanged('ocr-error');
     }
+
     await sendToArduino(TOKEN.OCR_FAIL);
     state = 'COOLDOWN';
     cooldownUntil = performance.now() + POST_SCAN_COOLDOWN_MS;
@@ -5129,67 +4796,43 @@ async function runBetaOcrScan(rowToScan: HTMLTableRowElement) {
 
 // ---------- Persistence helpers ----------
 function bindFilterPersistence() {
-  const save1 = (deviceId: string) => {
-    const s = loadDeviceSettings(deviceId);
-    s.filter = { ...filter1 };
-    s.crop = { ...crop1 };
-    s.hw = loadDeviceSettings(deviceId).hw;
-    saveDeviceSettings(deviceId, s);
-  };
-  const save2 = (deviceId: string) => {
-    const s = loadDeviceSettings(deviceId);
-    s.filter = { ...filter2 };
-    s.crop = { ...crop2 };
-    s.hw = loadDeviceSettings(deviceId).hw;
-    saveDeviceSettings(deviceId, s);
+  const saveTop = (deviceId: string) => {
+    const settings = loadDeviceSettings(deviceId);
+    settings.filter = { ...filter2 };
+    settings.crop = { ...crop2 };
+    settings.hw = loadDeviceSettings(deviceId).hw;
+    saveDeviceSettings(deviceId, settings);
   };
 
-  brightness1.addEventListener('input', () => {
-    filter1.brightness = Number(brightness1.value);
-    save1((document.getElementById('camera-select-1') as HTMLSelectElement).value);
-  });
-  contrast1.addEventListener('input', () => {
-    filter1.contrast = Number(contrast1.value);
-    save1((document.getElementById('camera-select-1') as HTMLSelectElement).value);
-  });
   brightness2.addEventListener('input', () => {
     filter2.brightness = Number(brightness2.value);
-    save2((document.getElementById('camera-select-2') as HTMLSelectElement).value);
+    saveTop((document.getElementById('camera-select-2') as HTMLSelectElement).value);
   });
+
   contrast2.addEventListener('input', () => {
     filter2.contrast = Number(contrast2.value);
-    save2((document.getElementById('camera-select-2') as HTMLSelectElement).value);
+    saveTop((document.getElementById('camera-select-2') as HTMLSelectElement).value);
   });
 }
 
-function applyDeviceSettingsToUI(camIndex: 1 | 2, deviceId: string) {
-  const s = loadDeviceSettings(deviceId);
-  if (camIndex === 1) {
-    Object.assign(crop1, s.crop);
-    Object.assign(filter1, s.filter);
-    zoom1.value = String(Math.round(crop1.width * 100));
-    x1.value = String(Math.round(crop1.x * 100));
-    y1.value = String(Math.round(crop1.y * 100));
-    brightness1.value = String(filter1.brightness);
-    contrast1.value = String(filter1.contrast);
-    zoom1.dispatchEvent(new Event('input'));
-  } else {
-    Object.assign(crop2, s.crop);
-    Object.assign(filter2, s.filter);
-    zoom2.value = String(Math.round(crop2.width * 100));
-    x2.value = String(Math.round(crop2.x * 100));
-    y2.value = String(Math.round(crop2.y * 100));
-    brightness2.value = String(filter2.brightness);
-    contrast2.value = String(filter2.contrast);
-    zoom2.dispatchEvent(new Event('input'));
-  }
+function applyDeviceSettingsToUI(deviceId: string) {
+  const settings = loadDeviceSettings(deviceId);
+
+  Object.assign(crop2, settings.crop);
+  Object.assign(filter2, settings.filter);
+
+  zoom2.value = String(Math.round(crop2.width * 100));
+  x2.value = String(Math.round(crop2.x * 100));
+  y2.value = String(Math.round(crop2.y * 100));
+  brightness2.value = String(filter2.brightness);
+  contrast2.value = String(filter2.contrast);
+
+  zoom2.dispatchEvent(new Event('input'));
 }
 
 function wireCropControls() {
-  const cam1Id = (document.getElementById('camera-select-1') as HTMLSelectElement).value;
-  const cam2Id = (document.getElementById('camera-select-2') as HTMLSelectElement).value;
-  setupCropControls(zoom1, x1, y1, crop1, filter1, cam1Id);
-  setupCropControls(zoom2, x2, y2, crop2, filter2, cam2Id);
+  const cameraId = (document.getElementById('camera-select-2') as HTMLSelectElement).value;
+  setupCropControls(zoom2, x2, y2, crop2, filter2, cameraId);
 }
 
 // ---------- Presence handling ----------
@@ -5197,7 +4840,10 @@ async function onPresenceStable(present: boolean) {
   const now = performance.now();
   if (state === 'COOLDOWN' && now < cooldownUntil) return;
 
-  if (currentAppMode === 'traceability_beta' && getBetaWorkflowPhase() === 'lrm_pairing') {
+  if (
+    currentAppMode === 'traceability_beta' &&
+    getBetaWorkflowPhase() === 'lrm_pairing'
+  ) {
     return;
   }
 
@@ -5211,6 +4857,7 @@ async function onPresenceStable(present: boolean) {
     if (state === 'ARMED') {
       if (currentAppMode === 'traceability_beta') {
         const rowToScan = betaCurrentUnit?.row ?? armedRow;
+
         if (rowToScan && betaCurrentUnit?.shroudRaw && betaCurrentUnit?.lrm) {
           state = 'PRESENT';
           await new Promise((r) => setTimeout(r, SETTLE_AFTER_PRESENT_MS));
@@ -5219,6 +4866,7 @@ async function onPresenceStable(present: boolean) {
           updateStatus('Complete QR and LRM first.', 'error');
           await sendToArduino(TOKEN.READY_FOR_OCR);
         }
+
         return;
       }
 
@@ -5234,80 +4882,49 @@ async function onPresenceStable(present: boolean) {
         await sendToArduino(TOKEN.READY_FOR_OCR);
       }
     }
-  } else {
-    if (currentAppMode === 'traceability_beta') {
-      if (state !== 'IDLE') {
-        await new Promise((r) => setTimeout(r, SETTLE_AFTER_REMOVAL_MS));
 
-        if (betaCurrentUnit?.shroudRaw && betaCurrentUnit?.lrm) {
-          state = 'ARMED';
-          updateStatus('Ready for OCR. Place the part on the sensor.', 'info');
-        } else if (betaCurrentUnit?.shroudRaw) {
-          state = 'WAITING_LRM';
-        } else if (betaCurrentUnit) {
-          state = 'WAITING_QR';
-        } else {
-          state = 'IDLE';
-        }
-      }
+    return;
+  }
 
-      const pendingPcbConfirmationRow = getPendingPcbConfirmationRow();
-      if (
-        pendingPcbConfirmationRow &&
-        pendingPcbConfirmationRow.dataset.mode === 'traceability_beta'
-      ) {
-        const pcbValue =
-          (
-            (pendingPcbConfirmationRow.querySelector('.beta-pcb-cell') as HTMLElement | null)
-              ?.textContent ?? ''
-          ).trim() || '—';
-
-        showPcbMatchControls(pcbValue);
-        await sendToArduino(TOKEN.NO_PART);
-        updateStatus('Confirm PCB match Yes or No before the next traceability row.', 'warn');
-        pcbMatchYesBtn?.focus();
-        return;
-      }
-
-      if (!betaCurrentUnit) {
-        updateStatus(
-          hasActiveBetaRun()
-            ? 'Ready for next Sequence QR scan.'
-            : 'Start traceability run to begin.',
-          'info',
-        );
-      }
-
-      await sendToArduino(TOKEN.NO_PART);
-      return;
-    }
-
+  if (currentAppMode === 'traceability_beta') {
     if (state !== 'IDLE') {
       await new Promise((r) => setTimeout(r, SETTLE_AFTER_REMOVAL_MS));
-      state = 'IDLE';
-      armedRow = null;
 
-      const pendingPcbConfirmationRow = getPendingStandardPcbConfirmationRow();
-      if (pendingPcbConfirmationRow) {
-        const pcbValue =
-          (
-            pendingPcbConfirmationRow.querySelector('.pcb-cell') as HTMLElement | null
-          )?.textContent?.trim() || '—';
-
-        showPcbMatchControls(pcbValue);
-        await sendToArduino(TOKEN.NO_PART);
-        updateStatus('Confirm PCB match Yes or No before the next row.', 'warn');
-        pcbMatchYesBtn?.focus();
-        return;
+      if (betaCurrentUnit?.shroudRaw && betaCurrentUnit?.lrm) {
+        state = 'ARMED';
+        updateStatus('Ready for Top Plate OCR. Place the part on the sensor.', 'info');
+      } else if (betaCurrentUnit?.shroudRaw) {
+        state = 'WAITING_LRM';
+      } else if (betaCurrentUnit) {
+        state = 'WAITING_QR';
+      } else {
+        state = 'IDLE';
       }
-
-      createStandardTableRow();
-      await sendToArduino(TOKEN.NO_PART);
-      updateStatus('Ready for next LRM scan.', 'info');
-    } else {
-      updateStatus('Ready for next LRM scan.', 'info');
-      await sendToArduino(TOKEN.NO_PART);
     }
+
+    if (!betaCurrentUnit) {
+      updateStatus(
+        hasActiveBetaRun()
+          ? 'Ready for next Sequence QR scan.'
+          : 'Start traceability run to begin.',
+        'info',
+      );
+    }
+
+    await sendToArduino(TOKEN.NO_PART);
+    return;
+  }
+
+  if (state !== 'IDLE') {
+    await new Promise((r) => setTimeout(r, SETTLE_AFTER_REMOVAL_MS));
+    state = 'IDLE';
+    armedRow = null;
+    createStandardTableRow();
+    await sendToArduino(TOKEN.NO_PART);
+    updateStatus('Ready for next LRM scan.', 'info');
+  } else {
+    updateStatus('Ready for next LRM scan.', 'info');
+    await sendToArduino(TOKEN.NO_PART);
   }
 }
 
@@ -5470,7 +5087,7 @@ async function start() {
     try {
       await initWebcams();
       wireCropControls();
-      livePreviewLoop(crop1, crop2, filter1, filter2);
+      livePreviewLoop(crop2, filter2);
       bindFilterPersistence();
     } catch (error) {
       showStartupError(error, 'Camera startup');
@@ -5529,14 +5146,6 @@ async function start() {
     }
 
     void enterSingleWindowStationMode(true);
-  });
-
-  pcbMatchYesBtn?.addEventListener('click', () => {
-    void handlePcbMatchDecision('yes');
-  });
-
-  pcbMatchNoBtn?.addEventListener('click', () => {
-    void handlePcbMatchDecision('no');
   });
 
   // ---------- Standard run ----------
@@ -5879,17 +5488,6 @@ async function start() {
 
   addRowBtn?.addEventListener('click', () => {
     if (currentAppMode !== 'standard') return;
-
-    if (getPendingStandardPcbConfirmationRow()) {
-      updateStatus('Confirm PCB match Yes or No before adding a new row.', 'warn');
-      const pendingRow = getPendingStandardPcbConfirmationRow();
-      const pcbValue =
-        (pendingRow?.querySelector('.pcb-cell') as HTMLElement | null)?.textContent?.trim() || '—';
-      showPcbMatchControls(pcbValue);
-      pcbMatchYesBtn?.focus();
-      return;
-    }
-
     createStandardTableRow();
   });
 
@@ -5906,48 +5504,13 @@ async function start() {
     await clearTable();
   });
 
-  const cameraSelect1El = document.getElementById('camera-select-1') as HTMLSelectElement | null;
   const cameraSelect2El = document.getElementById('camera-select-2') as HTMLSelectElement | null;
 
-  const ensureDifferentCameraSelection = (
-    changedSelect: HTMLSelectElement,
-    otherSelect: HTMLSelectElement,
-  ) => {
-    if (!changedSelect.value || !otherSelect.value) return;
-
-    if (changedSelect.value !== otherSelect.value) return;
-
-    const replacementOption = Array.from(otherSelect.options).find(
-      (option) => option.value !== changedSelect.value,
-    );
-
-    if (replacementOption) {
-      otherSelect.value = replacementOption.value;
-    }
-  };
-
-  cameraSelect1El?.addEventListener('change', (e) => {
+  cameraSelect2El?.addEventListener('change', (event) => {
     if (isLrmOnlyStation()) return;
-    const selectedDeviceId = (e.target as HTMLSelectElement).value;
 
-    if (cameraSelect2El) {
-      ensureDifferentCameraSelection(cameraSelect1El, cameraSelect2El);
-    }
-
-    applyDeviceSettingsToUI(1, selectedDeviceId);
-    wireCropControls();
-    void startStreams();
-  });
-
-  cameraSelect2El?.addEventListener('change', (e) => {
-    if (isLrmOnlyStation()) return;
-    const selectedDeviceId = (e.target as HTMLSelectElement).value;
-
-    if (cameraSelect1El) {
-      ensureDifferentCameraSelection(cameraSelect2El, cameraSelect1El);
-    }
-
-    applyDeviceSettingsToUI(2, selectedDeviceId);
+    const selectedDeviceId = (event.target as HTMLSelectElement).value;
+    applyDeviceSettingsToUI(selectedDeviceId);
     wireCropControls();
     void startStreams();
   });
