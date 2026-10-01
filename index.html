@@ -96,130 +96,11 @@
 
       <!-- 3-column workspace -->
       <main
-        class="grid grid-cols-1 lg:grid-cols-[minmax(320px,1fr)_minmax(320px,1fr)_minmax(760px,2.5fr)] gap-4 md:gap-6 w-full px-4 md:px-6 py-4 min-h-0 overflow-y-auto"
+        class="grid grid-cols-1 lg:grid-cols-[minmax(360px,1fr)_minmax(760px,2.5fr)] gap-4 md:gap-6 w-full px-4 md:px-6 py-4 min-h-0 overflow-y-auto"
       >
-        <!-- Column 1: Camera 1 panel -->
+        <!-- Column 1: Top Plate camera panel -->
         <section class="bg-white rounded-xl shadow p-4">
-          <h2 class="font-semibold text-lg mb-3">Camera 1: PCB #</h2>
-
-          <label class="block text-sm font-medium text-gray-700 mb-1">Device</label>
-          <select id="camera-select-1" class="w-full p-2 border rounded-md mb-3"></select>
-
-          <div class="space-y-4">
-            <div class="calibration-controls">
-              <div>
-                <div id="focus-control-container-1" class="hidden space-y-1 mb-3">
-                  <label for="focus-slider-1" class="block text-sm font-medium text-gray-700">
-                    Focus 1
-                  </label>
-                  <input id="focus-slider-1" type="range" class="w-full" />
-                </div>
-
-                <div id="exposure-control-container-1" class="hidden space-y-1 mb-3">
-                  <label for="exposure-slider-1" class="block text-sm font-medium text-gray-700">
-                    Exposure 1
-                  </label>
-                  <input id="exposure-slider-1" type="range" class="w-full" />
-                </div>
-
-                <div class="space-y-3">
-                  <div>
-                    <label for="zoom-1" class="block text-sm font-medium text-gray-700"
-                      >Zoom 1</label
-                    >
-                    <input id="zoom-1" type="range" min="10" max="100" value="90" />
-                  </div>
-
-                  <div>
-                    <label for="x-1" class="block text-sm font-medium text-gray-700"
-                      >X-Offset 1</label
-                    >
-                    <input id="x-1" type="range" min="0" max="90" value="5" />
-                  </div>
-
-                  <div>
-                    <label for="y-1" class="block text-sm font-medium text-gray-700"
-                      >Y-Offset 1</label
-                    >
-                    <input id="y-1" type="range" min="0" max="90" value="5" />
-                  </div>
-
-                  <div>
-                    <label for="brightness-1" class="block text-sm font-medium text-gray-700"
-                      >Brightness 1</label
-                    >
-                    <input id="brightness-1" type="range" min="0" max="200" value="100" step="5" />
-                  </div>
-
-                  <div>
-                    <label for="contrast-1" class="block text-sm font-medium text-gray-700"
-                      >Contrast 1</label
-                    >
-                    <input id="contrast-1" type="range" min="0" max="200" value="100" step="5" />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="preview-column space-y-3">
-              <div class="raw-image">
-                <div class="preview-frame preview-raw">
-                  <div class="preview-viewport">
-                    <video id="webcam1" playsinline autoplay muted></video>
-                  </div>
-                </div>
-              </div>
-
-              <div class="preview-frame preview-ocr">
-                <div class="preview-viewport">
-                  <canvas id="roi-preview-1"></canvas>
-                </div>
-              </div>
-
-              <div
-                id="ocr-result-card-1"
-                class="ocr-result-card rounded-lg border border-gray-200 bg-gray-50 px-3 py-3"
-              >
-                <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                  Latest OCR Result
-                </div>
-                <div id="ocr-result-label-1" class="mt-1 text-xs text-gray-500">PCB</div>
-                <div
-                  id="ocr-result-value-1"
-                  class="mt-2 min-h-[40px] flex items-center font-mono text-xl sm:text-2xl font-semibold text-gray-800 tracking-wide"
-                >
-                  —
-                </div>
-
-                <div id="pcb-match-controls" class="hidden mt-3 border-t border-gray-200 pt-3">
-                  <div id="pcb-match-prompt" class="text-xs font-medium text-gray-600">
-                    Do these match?
-                  </div>
-                  <div class="mt-2 flex gap-2">
-                    <button
-                      id="pcb-match-yes-btn"
-                      type="button"
-                      class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-                    >
-                      Yes
-                    </button>
-                    <button
-                      id="pcb-match-no-btn"
-                      type="button"
-                      class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-                    >
-                      No
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Column 2: Camera 2 panel -->
-        <section class="bg-white rounded-xl shadow p-4">
-          <h2 class="font-semibold text-lg mb-3">Camera 2: Top Plate #</h2>
+          <h2 class="font-semibold text-lg mb-3">Top Plate Camera</h2>
 
           <label class="block text-sm font-medium text-gray-700 mb-1">Device</label>
           <select id="camera-select-2" class="w-full p-2 border rounded-md mb-3"></select>
@@ -314,7 +195,7 @@
           </div>
         </section>
 
-        <!-- Column 3 -->
+        <!-- Column 2 -->
         <aside class="bg-white rounded-xl shadow p-4 flex flex-col min-h-0 overflow-hidden">
           <div id="status-container" class="shrink-0 overflow-y-auto pr-1 space-y-3 max-h-[55vh]">
             <!-- APP MODE -->
@@ -681,7 +562,7 @@
                       Step 3: Save pair / OCR stage
                     </div>
                     <p class="mt-2 text-xs text-gray-500">
-                      In LRM Pairing, save the Sequence + exposed LRM pair before shrouding/leak test. In Cartridge OCR, passing units load the saved LRM pair and then OCR PCB/Top Plate.
+                      In LRM Pairing, save the Sequence + exposed LRM pair before shrouding/leak test. In Cartridge OCR, passing units load the saved LRM pair and then OCR the Top Plate number.
                     </p>
                   </div>
                 </div>
@@ -719,7 +600,6 @@
                   <th class="min-w-[120px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Sequence #</th>
                   <th class="min-w-[120px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">LRM #</th>
                   <th class="min-w-[88px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Leak Test</th>
-                  <th class="min-w-[72px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">PCB #</th>
                   <th class="min-w-[104px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Top Plate #</th>
                   <th class="min-w-[140px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Status</th>
                   <th class="min-w-[96px] px-2 py-2 text-center font-semibold text-gray-600 uppercase whitespace-nowrap">Actions</th>
