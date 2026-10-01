@@ -16,7 +16,7 @@ export type OcrOnceFn = (
   videoEl: HTMLVideoElement,
   crop: Crop,
   filter: Filter,
-  label: 'Top Plate' | 'PCB',
+  label: 'Top Plate',
 ) => Promise<string | null>;
 
 export type WaitForFreshFrameFn = (videoEl: HTMLVideoElement, frames?: number) => Promise<void>;
@@ -85,7 +85,7 @@ export async function adaptiveBurstRead(
   videoEl: HTMLVideoElement,
   crop: Crop,
   filter: Filter,
-  label: 'Top Plate' | 'PCB',
+  label: 'Top Plate',
   ocrOnce: OcrOnceFn,
   maxAttempts = 3,
   minGapFrames = 1,
