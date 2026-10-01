@@ -1212,7 +1212,7 @@ async function routeKeyboardOcrScannerScan(raw: string) {
   }
 
   if (scanInFlight) {
-    updateStatus('Keyboard OCR scanner ignored. Finish the active cartridge OCR/PCB confirmation first.', 'warn');
+    updateStatus('Keyboard OCR scanner ignored. Finish the active Top Plate OCR first.', 'warn');
     return;
   }
 
@@ -1285,7 +1285,7 @@ async function routeSerialScannerScan(route: ScannerRoute, raw: string) {
 
   if (route === 'cartridge') {
     if (scanInFlight) {
-      updateStatus('OCR scanner ignored. Finish the active cartridge OCR/PCB confirmation first.', 'warn');
+      updateStatus('OCR scanner ignored. Finish the active Top Plate OCR first.', 'warn');
       return;
     }
     if (getBetaWorkflowPhase() !== 'cartridge_ocr' && !isLrmOnlyStation()) {
@@ -2670,13 +2670,9 @@ async function markBetaRecordFailed(record: ScanRecord, reason?: string) {
     leakTestStatus: 'fail',
     failureTs: Date.now(),
     failureReason,
-    pcb: null,
     top: null,
-    pcbFinal: null,
     topFinal: null,
-    pcbConf: 0,
     topConf: 0,
-    pcbHist: {},
     topHist: {},
     lockedByStation: undefined,
     lockedAt: undefined,
@@ -3638,7 +3634,6 @@ function betaRecordPriority(record: ScanRecord) {
   else if (record.workflowStatus === 'post_ocr_reject') score += 950;
   else if (record.workflowStatus === 'failed_pulled' || record.leakTestStatus === 'fail') score += 900;
   else if (
-    record.workflowStatus === 'needs_pcb_confirmation' ||
     record.workflowStatus === 'needs_top_correction' ||
     record.workflowStatus === 'needs_rescan'
   ) score += 800;
@@ -3648,7 +3643,6 @@ function betaRecordPriority(record: ScanRecord) {
   else if (record.workflowStatus === 'recovered_waiting_lrm') score += 300;
   else if (record.workflowStatus === 'missing') score += 200;
 
-  if (isNonEmptyString(record.pcbFinal ?? record.pcb ?? '')) score += 40;
   if (isNonEmptyString(record.topFinal ?? record.top ?? '')) score += 40;
   if (isNonEmptyString(record.lrm)) score += 20;
   if (record.customerQrCode) score += 5;
@@ -3698,10 +3692,6 @@ function getBetaRecordLyo(record: ScanRecord) {
   return record.lyoCondition ?? getBetaLyo();
 }
 
-function getBetaRecordPcbDisplay(record: ScanRecord) {
-  return record.pcbFinal ?? record.pcb ?? '';
-}
-
 function getBetaRecordTopDisplay(record: ScanRecord) {
   return record.topFinal ?? record.top ?? '';
 }
@@ -3711,7 +3701,6 @@ function populateBetaTableRowFromRecord(row: HTMLTableRowElement, record: ScanRe
   const build = getBetaRecordBuild(record);
   const lyo = getBetaRecordLyo(record);
   const lrm = record.lrm ?? '';
-  const pcbDisplay = getBetaRecordPcbDisplay(record);
   const topDisplay = getBetaRecordTopDisplay(record);
   const cartridgeComplete = isBetaCartridgeCompleteRecord(record);
 
@@ -3729,7 +3718,6 @@ function populateBetaTableRowFromRecord(row: HTMLTableRowElement, record: ScanRe
   const sequenceCell = row.querySelector('.beta-sequence-cell') as HTMLElement | null;
   const lrmCell = row.querySelector('.beta-lrm-cell') as HTMLElement | null;
   const leakCell = row.querySelector('.beta-leak-cell') as HTMLElement | null;
-  const pcbCell = row.querySelector('.beta-pcb-cell') as HTMLElement | null;
   const topCell = row.querySelector('.beta-top-cell') as HTMLElement | null;
 
   if (buildCell) buildCell.textContent = build;
@@ -3737,7 +3725,6 @@ function populateBetaTableRowFromRecord(row: HTMLTableRowElement, record: ScanRe
   if (sequenceCell) sequenceCell.textContent = sequence;
   if (lrmCell) lrmCell.textContent = lrm;
   updateBetaLeakCell(row, record.leakTestStatus === 'fail' ? 'fail' : record.leakTestStatus === 'pass' || cartridgeComplete ? 'pass' : 'pending');
-  if (pcbCell) pcbCell.textContent = pcbDisplay;
 
   if (topCell) {
     topCell.textContent = topDisplay;
@@ -3752,7 +3739,7 @@ function populateBetaTableRowFromRecord(row: HTMLTableRowElement, record: ScanRe
     }
   }
 
-  if (record.pcbOverrideReason || record.topOverrideReason) {
+  if (record.topOverrideReason) {
     row.querySelector('.beta-override-badge')?.classList.remove('hidden');
   } else {
     row.querySelector('.beta-override-badge')?.classList.add('hidden');
@@ -3773,8 +3760,6 @@ function populateBetaTableRowFromRecord(row: HTMLTableRowElement, record: ScanRe
     showBetaRowStatus(row, 'Needs Top Correction', 'error');
   } else if (record.workflowStatus === 'needs_rescan') {
     showBetaRowStatus(row, 'Needs Rescan', 'error');
-  } else if (record.workflowStatus === 'needs_pcb_confirmation') {
-    showBetaRowStatus(row, 'Confirm PCB');
   } else if (cartridgeComplete) {
     showBetaRowStatus(row, 'Complete', 'ok');
   } else {
@@ -3902,10 +3887,6 @@ function setAppMode(nextMode: AppMode) {
 function createStandardTableRow() {
   const row = document.createElement('tr');
   row.dataset.mode = 'standard';
-  row.dataset.pcbConfirmRequired = 'false';
-  row.dataset.pcbConfirmed = 'true';
-  row.dataset.pcbConfirmAnswer = '';
-
   row.innerHTML = `
     <td class="px-2 py-2 font-mono cond-cell text-center whitespace-nowrap"></td>
     <td class="px-2 py-2 whitespace-nowrap">
@@ -4258,13 +4239,9 @@ async function saveCurrentBetaLrmPair(row: HTMLTableRowElement, sequenceQrRaw: s
     leakTestStatus: 'pending',
     mixwheelLot: getBetaMixwheelLot(),
     lrmPairTs: nowTs,
-    pcb: null,
     top: null,
-    pcbConf: 0,
     topConf: 0,
-    pcbHist: {},
     topHist: {},
-    pcbFinal: null,
     topFinal: null,
   });
 
@@ -5019,7 +4996,7 @@ async function exportFromDB() {
       (record) => isNonEmptyString(record.lrm) && record.leakTestStatus !== 'fail' && !isBetaCartridgeCompleteRecord(record),
     ).length;
     const needsReview = records.filter((record) =>
-      ['loaded_for_cartridge_ocr', 'ocr_in_progress', 'needs_pcb_confirmation', 'needs_top_correction', 'needs_rescan'].includes(record.workflowStatus ?? ''),
+      ['loaded_for_cartridge_ocr', 'ocr_in_progress', 'needs_top_correction', 'needs_rescan'].includes(record.workflowStatus ?? ''),
     ).length;
     const missing = getBetaMissingNumbers().length;
 
