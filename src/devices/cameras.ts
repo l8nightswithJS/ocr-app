@@ -231,8 +231,6 @@ export async function startStreams() {
 }
 
 export async function initWebcams() {
-  let retriedAfterNotFound = false;
-
   try {
     if (!window.isSecureContext && location.hostname !== 'localhost') {
       console.warn('Not a secure context. Use http://localhost or https:// for stable device IDs/labels.');
@@ -248,17 +246,6 @@ export async function initWebcams() {
     videoDevices = devices.filter((device) => device.kind === 'videoinput');
 
     if (videoDevices.length < 1) {
-      if (!retriedAfterNotFound) {
-        try {
-          localStorage.removeItem('c920_cam2_deviceId');
-        } catch {}
-
-        retriedAfterNotFound = true;
-        updateStatus('Camera selection cleared. Retrying...', 'info');
-        await initWebcams();
-        return;
-      }
-
       updateStatus('Error: A Top Plate webcam is required.', 'error');
       return;
     }
