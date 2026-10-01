@@ -3,9 +3,9 @@
 // - Exports ONLY today's scans (local time)
 // - Supports BOTH standard mode and traceability beta mode
 // - Standard mode exports:
-//   condition, lyoCondition, ts, lrm, pcb, top
+//   condition, lyoCondition, ts, lrm, top
 // - Traceability beta mode exports:
-//   buildNumber, lyoCondition, sequenceNumber, shroudQr, pairTs, cartridgeTs, lrm, leakTestStatus, workflowStatus, pcb, top
+//   buildNumber, lyoCondition, sequenceNumber, shroudQr, pairTs, cartridgeTs, lrm, leakTestStatus, workflowStatus, top
 // - Injects reserved "missing cartridge" rows for both standard mode and traceability beta mode
 // - Sorts output appropriately for each mode
 // - Deduplicates beta export rows by sequence number, keeping the latest scan for each sequence
@@ -31,7 +31,6 @@ type StandardExportRow = {
   lyoCondition: string;
   ts: string;
   lrm: string;
-  pcb: string;
   top: string;
   sortBase: string;
   sortNum: number;
@@ -56,7 +55,6 @@ type BetaExportRow = {
   failureReason: string;
   postOcrRejectTs: string;
   postOcrRejectReason: string;
-  pcb: string;
   top: string;
 };
 
@@ -224,7 +222,6 @@ function toStandardExportRow(r: ScanRecord): StandardExportRow {
     lyoCondition: (r.lyoCondition ?? '').trim(),
     ts: new Date(r.ts).toISOString(),
     lrm: (r.lrm ?? '').trim(),
-    pcb: (r.pcbFinal ?? r.pcb ?? '').trim(),
     top: (r.topFinal ?? r.top ?? '').trim(),
     sortBase: parsed?.base ?? '',
     sortNum: parsed?.num ?? Number.MAX_SAFE_INTEGER,
@@ -232,11 +229,10 @@ function toStandardExportRow(r: ScanRecord): StandardExportRow {
 }
 
 function toBetaExportRow(r: ScanRecord): BetaExportRow {
-  const pcb = (r.pcbFinal ?? r.pcb ?? '').trim();
   const top = (r.topFinal ?? r.top ?? '').trim();
   const label = (r.sequenceNumber ?? r.condition ?? '').trim();
   const complete = r.workflowStatus === 'complete' || r.workflowStatus === 'post_ocr_reject';
-  const hasLegacyComplete = !r.workflowStatus && isNonEmpty(pcb) && pcb !== 'NO_CODE_FOUND' && isNonEmpty(top) && top !== 'NO_CODE_FOUND';
+  const hasLegacyComplete = !r.workflowStatus && isNonEmpty(top) && top !== 'NO_CODE_FOUND';
   const customerQrCode = (r.customerQrCode ?? lookupCustomerQrCode(label)).trim();
   const failureTs = r.failureTs ? new Date(r.failureTs).toISOString() : '';
   const postOcrRejectTs = r.postOcrRejectTs ? new Date(r.postOcrRejectTs).toISOString() : '';
@@ -255,7 +251,6 @@ function toBetaExportRow(r: ScanRecord): BetaExportRow {
     workflowStatus = 'Post-OCR Reject';
   }
 
-  if (r.workflowStatus === 'needs_pcb_confirmation') workflowStatus = 'Needs PCB Confirmation';
   if (r.workflowStatus === 'needs_top_correction') workflowStatus = 'Needs Top Correction';
   if (r.workflowStatus === 'needs_rescan') workflowStatus = 'Needs Rescan';
   if (r.workflowStatus === 'loaded_for_cartridge_ocr') workflowStatus = 'Loaded / Pending OCR';
@@ -285,7 +280,6 @@ function toBetaExportRow(r: ScanRecord): BetaExportRow {
     failureReason: (r.failureReason ?? '').trim(),
     postOcrRejectTs,
     postOcrRejectReason: (r.postOcrRejectReason ?? '').trim(),
-    pcb,
     top,
   };
 }
@@ -346,7 +340,6 @@ function buildMissingRowsFromRunState(existingConditions: Set<string>): Standard
       lyoCondition,
       ts: '',
       lrm: 'Missing Cartridge',
-      pcb: '',
       top: '',
       sortBase: base,
       sortNum: num,
@@ -392,7 +385,6 @@ function buildMissingRowsFromBetaState(
       failureReason: '',
       postOcrRejectTs: '',
       postOcrRejectReason: '',
-      pcb: '',
       top: '',
     });
   }
@@ -412,7 +404,6 @@ function getBetaHeaders() {
     'Cartridge OCR TS',
     'Failure TS',
     'LRM',
-    'PCB',
     'Top Plate',
     'Mixwheel Lot#',
     'Sample Cap Lot#',
@@ -436,7 +427,6 @@ function betaRowToCsvLine(r: BetaExportRow) {
     esc(r.cartridgeTs),
     esc(r.failureTs),
     esc(r.lrm),
-    esc(r.pcb),
     esc(r.top),
     esc(r.mixwheelLot),
     esc(r.sampleCapLot),
@@ -507,11 +497,11 @@ export async function exportCsv(db: DB): Promise<string> {
       return a.condition.localeCompare(b.condition);
     });
 
-    const headers = ['Condition', 'Lyo Condition', 'TS', 'LRM', 'PCB', 'Top'];
+    const headers = ['Condition', 'Lyo Condition', 'TS', 'LRM', 'Top'];
     const lines = [
       headers.join(','),
       ...combined.map((r) =>
-        [esc(r.condition), esc(r.lyoCondition), esc(r.ts), esc(r.lrm), esc(r.pcb), esc(r.top)].join(
+        [esc(r.condition), esc(r.lyoCondition), esc(r.ts), esc(r.lrm), esc(r.top)].join(
           ',',
         ),
       ),
@@ -550,10 +540,10 @@ export async function exportCsv(db: DB): Promise<string> {
   const lines: string[] = [];
 
   lines.push('STANDARD MODE EXPORT');
-  lines.push(['Condition', 'Lyo Condition', 'TS', 'LRM', 'PCB', 'Top'].join(','));
+  lines.push(['Condition', 'Lyo Condition', 'TS', 'LRM', 'Top'].join(','));
   lines.push(
     ...standardCombined.map((r) =>
-      [esc(r.condition), esc(r.lyoCondition), esc(r.ts), esc(r.lrm), esc(r.pcb), esc(r.top)].join(
+      [esc(r.condition), esc(r.lyoCondition), esc(r.ts), esc(r.lrm), esc(r.top)].join(
         ',',
       ),
     ),
