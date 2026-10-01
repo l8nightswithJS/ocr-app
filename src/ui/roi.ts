@@ -1,9 +1,7 @@
 import { loadDeviceSettings, saveDeviceSettings, type Crop, type Filter } from '../state/store';
 import { requireEl } from './dom';
 
-const roiPreview1 = requireEl<HTMLCanvasElement>('roi-preview-1');
 const roiPreview2 = requireEl<HTMLCanvasElement>('roi-preview-2');
-const webcam1 = requireEl<HTMLVideoElement>('webcam1');
 const webcam2 = requireEl<HTMLVideoElement>('webcam2');
 
 const cropControlBindings = new WeakMap<HTMLInputElement, AbortController>();
@@ -50,10 +48,9 @@ export function updateRoiPreview(
   ctx.drawImage(videoElement, roiX, roiY, roiW, roiH, 0, 0, targetW, targetH);
 }
 
-export function livePreviewLoop(crop1: Crop, crop2: Crop, filter1: Filter, filter2: Filter) {
-  updateRoiPreview(webcam1, roiPreview1, crop1, filter1);
-  updateRoiPreview(webcam2, roiPreview2, crop2, filter2);
-  requestAnimationFrame(() => livePreviewLoop(crop1, crop2, filter1, filter2));
+export function livePreviewLoop(crop: Crop, filter: Filter) {
+  updateRoiPreview(webcam2, roiPreview2, crop, filter);
+  requestAnimationFrame(() => livePreviewLoop(crop, filter));
 }
 
 export function setupCropControls(
