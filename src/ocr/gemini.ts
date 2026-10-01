@@ -18,12 +18,9 @@ const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI
 export type Crop = { x: number; y: number; width: number; height: number };
 export type Filter = { brightness: number; contrast: number };
 
-// ---- Orientation knobs ----
-const PCB_ROTATION: 0 | 90 | 180 | 270 = 270;
-const PCB_FLIP_H = false;
+// Top Plate camera orientation.
 const TOP_ROTATION: 0 | 90 | 180 | 270 = 0;
 const TOP_FLIP_H = false;
-// ---------------------------
 
 const MAX_DIGITS = 5;
 const GEMINI_TIMEOUT_MS = 8000;
@@ -37,7 +34,7 @@ export async function readNumberFromCamera(
   videoEl: HTMLVideoElement,
   crop: Crop,
   filter: Filter,
-  label: 'Top Plate' | 'PCB',
+  label: 'Top Plate',
 ): Promise<string> {
   if (SIM_MODE && SIM_OCR_MODE === 'fixed') {
     return getFixedSimValue(videoEl, label) ?? 'NONE';
@@ -47,19 +44,17 @@ export async function readNumberFromCamera(
   if (!source || !vw || !vh) return 'NONE';
 
   const cssFilter = `brightness(${filter.brightness}%) contrast(${filter.contrast}%)`;
-  const isPcb = label === 'PCB';
-
   const finalCanvas = drawCropToOffscreen(
     source,
     vw,
     vh,
     crop,
     cssFilter,
-    isPcb ? PCB_ROTATION : TOP_ROTATION,
-    isPcb ? PCB_FLIP_H : TOP_FLIP_H,
+    TOP_ROTATION,
+    TOP_FLIP_H,
   );
 
-  const prompt = buildPrompt(label, MAX_DIGITS);
+  const prompt = buildPrompt(MAX_DIGITS);
 
   try {
     const fastCanvas = resizeCanvasToHeight(finalCanvas, OCR_TARGET_HEIGHT);
@@ -83,30 +78,13 @@ export async function readNumberFromCamera(
   }
 }
 
-function getFixedSimValue(videoEl: HTMLVideoElement, label: 'Top Plate' | 'PCB'): string | null {
+function getFixedSimValue(videoEl: HTMLVideoElement, _label: 'Top Plate'): string | null {
   const direct = normalizeDigits(videoEl.dataset.simOcrValue ?? '', MAX_DIGITS);
   if (direct) return direct;
-
-  if (label === 'PCB') {
-    return normalizeDigits(videoEl.dataset.simPcbValue ?? '', MAX_DIGITS);
-  }
-
   return normalizeDigits(videoEl.dataset.simTopValue ?? '', MAX_DIGITS);
 }
 
-function buildPrompt(label: 'Top Plate' | 'PCB', maxDigits: number) {
-  if (label === 'PCB') {
-    return [
-      `Extract the handwritten number from the image.`,
-      `Return ONLY digits, with no spaces, punctuation, or extra words.`,
-      `The number may contain between 1 and ${maxDigits} digits.`,
-      `The original writing was vertical top-to-bottom.`,
-      `The image has already been rotated so the digits should read left-to-right.`,
-      `Be careful with confusing digits like 9/4/6, 8/6, and 5/2.`,
-      `If no number is clearly readable, return NONE.`,
-    ].join(' ');
-  }
-
+function buildPrompt(maxDigits: number) {
   return [
     `Extract the handwritten number from the image.`,
     `Return ONLY digits, with no spaces, punctuation, or extra words.`,
