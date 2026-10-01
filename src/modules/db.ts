@@ -18,7 +18,6 @@ export type ScanRecord = {
     | 'lrm_paired_pending_leak'
     | 'loaded_for_cartridge_ocr'
     | 'ocr_in_progress'
-    | 'needs_pcb_confirmation'
     | 'needs_top_correction'
     | 'needs_rescan'
     | 'complete'
@@ -43,22 +42,17 @@ export type ScanRecord = {
   lrmPairTs?: number;
   cartridgeScanTs?: number;
 
-  // voted raw
-  pcb: string | null;
-  top: string | null;
-  pcbConf: number;
-  topConf: number;
-  pcbHist: Record<string, number>;
-  topHist: Record<string, number>;
+  // Top Plate OCR result. Fields are optional because pairing/failure records
+  // can exist before cartridge OCR is performed.
+  top?: string | null;
+  topConf?: number;
+  topHist?: Record<string, number>;
 
-  // final (after override)
-  pcbFinal: string | null;
-  topFinal: string | null;
-  pcbOverrideReason?: string | null;
+  // Final value after an operator correction.
+  topFinal?: string | null;
   topOverrideReason?: string | null;
 
-  // optional
-  pcbEvidence?: string[];
+  // Optional OCR evidence.
   topEvidence?: string[];
 };
 
