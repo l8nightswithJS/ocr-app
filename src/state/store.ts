@@ -48,7 +48,7 @@ export interface UI {
   showStartupWarning(show: boolean, msg?: string): void;
 
   ensureActiveRow(lrm: string): HTMLElement;
-  setRowOCR(row: HTMLElement, which: 'pcb' | 'top', value: string): void;
+  setRowOCR(row: HTMLElement, value: string): void;
   setRowBusy(row: HTMLElement, busy: boolean, note?: string): void;
   lockRow(row: HTMLElement): void;
 
@@ -177,11 +177,10 @@ export class LineFSM {
     this.ui.showStatus('Canceled. Ready — scan LRM to begin.', 'idle');
   }
 
-  onOcrSuccess(result: { pcb?: string; top?: string }) {
+  onOcrSuccess(result: { top?: string }) {
     if (!this.session || this.session.state !== 'CAPTURING') return;
     const row = this.ui.ensureActiveRow(this.session.lrm || '');
-    if (result.pcb) this.ui.setRowOCR(row, 'pcb', result.pcb);
-    if (result.top) this.ui.setRowOCR(row, 'top', result.top);
+    if (result.top) this.ui.setRowOCR(row, result.top);
 
     this.ui.lockRow(row);
     this.session.state = 'DONE';
