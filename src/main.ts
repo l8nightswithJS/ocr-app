@@ -69,7 +69,7 @@ const SIM_OCR_MAX_ATTEMPTS = Math.max(1, Number(import.meta.env.VITE_SIM_OCR_MAX
 
 const OCR_MIN_GAP_FRAMES = Math.max(0, Number(import.meta.env.VITE_OCR_MIN_GAP_FRAMES ?? '1'));
 
-const APP_BUILD_LABEL = 'GNM-HYBRID-2026-06-24.5';
+const APP_BUILD_LABEL = 'GNM-TOP-ONLY-2026-10-01.1';
 
 // ---------- Modes ----------
 type AppMode = 'standard' | 'traceability_beta';
