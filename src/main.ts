@@ -3370,7 +3370,7 @@ async function completeBetaUnitAfterVerification(
   return true;
 }
 
-async function promptAndApplyBetaTopOverrideasync function promptAndApplyBetaTopOverride(
+async function promptAndApplyBetaTopOverride(
   row: HTMLTableRowElement,
   currentValue: string,
   autoOpened = false,
@@ -3999,7 +3999,7 @@ function attachOverride(cell: HTMLElement, row: HTMLTableRowElement) {
   });
 }
 
-function attachLrmOverridefunction attachLrmOverride(input: HTMLInputElement, row: HTMLTableRowElement) {
+function attachLrmOverride(input: HTMLInputElement, row: HTMLTableRowElement) {
   input.addEventListener('dblclick', () => {
     if (input.dataset.accepted !== 'true') return;
 
